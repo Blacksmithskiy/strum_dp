@@ -51,6 +51,10 @@ client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
 
 @client.on(events.NewMessage(chats=SOURCE_CHANNELS))
 async def handler(event):
+    # ТЕСТОВИЙ БЛОК: Видалити після перевірки
+    service = await get_tasks_service()
+    service.tasks().insert(tasklist='@default', body={'title': '🚀 ПЕРЕВІРКА: Агент 1.1 на зв’язку!'}).execute()
+    print("✅ Тестове завдання відправлено в телефон!")
     if event.message.photo:
         print(f"📸 Вижу новый график в {event.chat.title}...")
         path = await event.message.download_media()
