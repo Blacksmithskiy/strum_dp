@@ -16,9 +16,15 @@ SESSION_STRING = os.environ['TELEGRAM_SESSION']
 GEMINI_KEY = os.environ['GEMINI_API_KEY']
 GOOGLE_TOKEN = os.environ['GOOGLE_TOKEN_JSON']
 
-# Ваша група для моніторингу
+# Конфігурація
 MY_GROUP = "1.1"
 SOURCE_CHANNELS = ['dtek_ua', 'avariykaaa']
+
+# Фільтри
+REGION_TAG = "дніпропетровщина"
+PROVIDER_TAG = "дтек"
+IGNORE_PROVIDER = "цек"
+NOISE_WORDS = ['вода', 'водоканал', 'труб', 'каналізац', 'опалення']
 
 # Ініціалізація ШІ
 genai.configure(api_key=GEMINI_KEY)
@@ -30,13 +36,16 @@ async def get_tasks_service():
     return build('tasks', 'v1', credentials=creds)
 
 async def ask_gemini_about_schedule(photo_path, text):
+    # Промпт став суворішим та фокусованим
     prompt = f"""
-    Це графік відключень світла у Дніпрі. Перевір його для групи {MY_GROUP}.
+    Це графік відключень світла. 
+    ВАЖЛИВО: Нас цікавить ТІЛЬКИ Дніпропетровська область та ТІЛЬКИ компанія ДТЕК.
+    Ігноруй дані для Києва, Одеси, Київщини чи Одещини. Ігноруй компанію ЦЕК.
+    Знайди графік для групи {MY_GROUP}.
     Текст поста: {text}
-    Якщо в тексті або на картинці є час відключення для групи {MY_GROUP} на СЕГОДНЯ або ЗАВТРА, 
-    поверни відповідь ТІЛЬКИ у форматі JSON: 
+    Поверни відповідь ТІЛЬКИ у форматі JSON: 
     [{{"start": "YYYY-MM-DDTHH:MM:SS", "end": "YYYY-MM-DDTHH:MM:SS"}}]
-    Якщо даних немає, поверни порожній список [].
+    Якщо даних для Дніпропетровщини або групи {MY_GROUP} немає, поверни порожній список [].
     """
     img = genai.upload_file(photo_path)
     response = model.generate_content([prompt, img])
@@ -50,9 +59,25 @@ client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
 
 @client.on(events.NewMessage(chats=SOURCE_CHANNELS))
 async def handler(event):
-    # Тепер код всередині функції має вірні відступи
+    raw_text = (event.message.message or "").lower()
+    
+    # 1. Фільтр провайдера та регіону (Первинна перевірка)
+    # Якщо це канал DTEK, шукаємо згадку нашої області
+    if event.chat.username == 'dtek_ua' and REGION_TAG not in raw_text:
+        return
+
+    # Якщо це Аварійка, відсікаємо ЦЕК, якщо немає згадки ДТЕК
+    if event.chat.username == 'avariykaaa':
+        if IGNORE_PROVIDER in raw_text and PROVIDER_TAG not in raw_text:
+            print("📎 Пропускаю пост ЦЕК")
+            return
+
+    # 2. Фільтр шуму (вода/ремонти)
+    if any(word in raw_text for word in NOISE_WORDS) and PROVIDER_TAG not in raw_text:
+        return
+
     if event.message.photo:
-        print(f"📸 Виявлено новий графік у {event.chat.title}. Аналізую...")
+        print(f"📸 Аналізую графік Дніпропетровщини у {event.chat.title}...")
         path = await event.message.download_media()
         
         schedule = await ask_gemini_about_schedule(path, event.message.message)
@@ -62,20 +87,27 @@ async def handler(event):
             service = await get_tasks_service()
             for entry in schedule:
                 start_dt = parser.parse(entry['start'])
-                # Нагадування за 15 хвилин до початку
-                remind_dt = start_dt - timedelta(minutes=15)
+                end_dt = parser.parse(entry['end'])
                 
+                # Завдання в Google Tasks
+                remind_dt = start_dt - timedelta(minutes=15)
                 task = {
                     'title': f"💡 ВІДКЛЮЧЕННЯ (Група {MY_GROUP})",
-                    'notes': f"Заплановано з {entry['start']} до {entry['end']}",
+                    'notes': f"Дніпропетровщина. ДТЕК. З {start_dt.strftime('%H:%M')} до {end_dt.strftime('%H:%M')}",
                     'due': remind_dt.isoformat() + 'Z'
                 }
                 service.tasks().insert(tasklist='@default', body=task).execute()
-                print(f"✅ Завдання створено на {start_dt}")
+                
+                # Особисте повідомлення
+                time_str = f"з {start_dt.strftime('%H:%M')} до {end_dt.strftime('%H:%M')}"
+                dm_text = f"⚡️ **Світла не буде {time_str}** (Дніпропетровщина, ДТЕК), пора зарядити power bank"
+                await client.send_message('me', dm_text)
+                
+                print(f"✅ Сповіщення для групи {MY_GROUP} надіслано")
         else:
-            print(f"ℹ️ У новому пості немає графіків для групи {MY_GROUP}.")
+            print(f"ℹ️ Пост не містить актуальних графіків для вашої групи.")
 
-print(f"🚀 ІІ-Агент STRUM запущений. Моніторинг групи {MY_GROUP} активний...")
+print(f"🚀 Агент STRUM на варті. Тільки Дніпропетровщина, тільки ДТЕК, група {MY_GROUP}.")
 
 with client:
     client.run_until_disconnected()
