@@ -1,14 +1,14 @@
 name: STRUM AI AGENT 24/7
 
 on:
-  workflow_dispatch:      # Кнопка ручного запуска
+  workflow_dispatch:
   schedule:
-    - cron: "0 */6 * * *" # Автоматический перезапуск каждые 6 часов
+    - cron: "0 */6 * * *"
 
 jobs:
   run-bot:
     runs-on: ubuntu-latest
-    timeout-minutes: 360  # Жесткий лимит 6 часов (чтобы GitHub не ругался)
+    timeout-minutes: 360
     
     steps:
       - uses: actions/checkout@v3
@@ -20,7 +20,7 @@ jobs:
           
       - name: Install dependencies
         run: |
-          pip install telethon google-generativeai google-auth google-auth-oauthlib google-auth-httplib2 google-api-python-client pillow
+          pip install telethon google-generativeai google-auth google-auth-oauthlib google-auth-httplib2 google-api-python-client pillow python-dateutil
           
       - name: Run AI Agent
         env:
