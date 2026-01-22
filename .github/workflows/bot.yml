@@ -1,14 +1,19 @@
 name: STRUM AI AGENT 24/7
 
 on:
-  workflow_dispatch:
+  workflow_dispatch:      # Кнопка ручного запуска
   schedule:
-    - cron: "0 */6 * * *"
+    - cron: "0 */6 * * *" # Автоматичний перезапуск кожні 6 годин
+
+# 🔥 ГОЛОВНИЙ ЗАХИСТ: Вбиває старі копії при запуску нових
+concurrency:
+  group: production-bot
+  cancel-in-progress: true
 
 jobs:
   run-bot:
     runs-on: ubuntu-latest
-    timeout-minutes: 360
+    timeout-minutes: 360  # Ліміт 6 годин
     
     steps:
       - uses: actions/checkout@v3
