@@ -40,8 +40,17 @@ async def get_tasks_service():
     return build('tasks', 'v1', credentials=creds)
 
 def ask_gemini_smart(photo_path, text):
-    # Додали стару vision модель, вона краще бачить таблиці
-    models_to_try = ["gemini-1.5-flash-002", "gemini-1.5-flash", "gemini-2.0-flash-exp"]
+    # ПОВНІ АДРЕСИ (Stable v1 та Beta v1beta)
+    urls_to_try = [
+        # 1. Основна стабільна (Flash 1.5) - v1
+        "https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent",
+        # 2. Новіша стабільна (Flash 1.5-002) - v1beta
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-002:generateContent",
+        # 3. Стара надійна (Pro Vision) - v1
+        "https://generativelanguage.googleapis.com/v1/models/gemini-pro-vision:generateContent",
+        # 4. Експериментальна (2.0) - v1beta
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent"
+    ]
     
     try:
         with open(photo_path, "rb") as image_file:
@@ -61,32 +70,43 @@ def ask_gemini_smart(photo_path, text):
 
     last_error = ""
 
-    for model in models_to_try:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={GEMINI_KEY}"
+    for url in urls_to_try:
+        # Витягуємо назву моделі для логів
+        model_name = "Unknown"
+        if "gemini-1.5-flash" in url: model_name = "Flash 1.5 (Stable)"
+        if "gemini-1.5-flash-002" in url: model_name = "Flash 002 (Beta)"
+        if "gemini-pro-vision" in url: model_name = "Pro Vision (Legacy)"
+        if "gemini-2.0" in url: model_name = "Flash 2.0 (Exp)"
+
+        full_url = f"{url}?key={GEMINI_KEY}"
+        
         for attempt in range(2):
             try:
-                response = requests.post(url, json=payload, headers={'Content-Type': 'application/json'}, timeout=30)
+                #print(f"👉 Пробую: {model_name}...") # (Можна розкоментувати для дебагу)
+                response = requests.post(full_url, json=payload, headers={'Content-Type': 'application/json'}, timeout=30)
+                
                 if response.status_code == 200:
                     try:
                         result = response.json()
-                        raw_text = result['candidates'][0]['content']['parts'][0]['text']
-                        # Чистимо відповідь
-                        clean_res = raw_text.replace('```json', '').replace('```', '').strip()
-                        # Спроба парсингу
-                        parsed = json.loads(clean_res)
-                        return parsed # Повертаємо готовий список
+                        if 'candidates' in result and result['candidates']:
+                            raw_text = result['candidates'][0]['content']['parts'][0]['text']
+                            clean_res = raw_text.replace('```json', '').replace('```', '').strip()
+                            parsed = json.loads(clean_res)
+                            return parsed # УСПІХ!
+                        else:
+                            return [] # Пуста відповідь (немає графіків)
                     except Exception as e:
-                        return f"PARSE_ERROR: {raw_text}" # Повертаємо сирий текст, якщо це не JSON
+                        return f"PARSE_ERROR: {raw_text}"
                 elif response.status_code == 429:
-                    time.sleep(5)
+                    time.sleep(5) # Чекаємо і пробуємо ту ж модель
                     continue
                 else:
-                    last_error = f"HTTP {response.status_code}"
-                    break
+                    last_error = f"{model_name}: HTTP {response.status_code}"
+                    break # Ця модель не працює, йдемо до наступної
             except Exception as e:
                 last_error = str(e)
                 break
-    return f"ALL_FAILED: {last_error}"
+    return f"ALL_FAILED. Ost error: {last_error}"
 
 client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
 
@@ -108,22 +128,18 @@ async def handler(event):
         except: pass
         return
 
-    # ГРАФІКИ (Режим Діагностики)
+    # ГРАФІКИ
     if event.message.photo:
-        # Пишемо, що почали роботу (щоб ви знали, що бот не спить)
-        status_msg = await client.send_message(MAIN_ACCOUNT_USERNAME, "🧐 **Бачу графік.** Починаю аналіз...")
+        status_msg = await client.send_message(MAIN_ACCOUNT_USERNAME, "🧐 **Бачу графік.** Пробую різні моделі AI...")
         
         path = await event.message.download_media()
-        # Викликаємо Gemini
         result = await asyncio.to_thread(ask_gemini_smart, path, event.message.message)
         os.remove(path)
         
-        # 1. Якщо результат - це список (все ок)
         if isinstance(result, list):
             if not result:
-                await client.edit_message(status_msg, "⚠️ **Аналіз завершено:** Графік розпізнано, але для **Групи 1.1** відключень не знайдено (або Gemini повернув порожній список).")
+                await client.edit_message(status_msg, "✅ **Аналіз завершено:** Графік розпізнано, але для **Групи 1.1** відключень не знайдено.")
             else:
-                # УСПІХ
                 schedule = result
                 service = await get_tasks_service()
                 for entry in schedule:
@@ -142,13 +158,11 @@ async def handler(event):
                     try: await client.send_message(CHANNEL_USERNAME, msg, file=IMG_SCHEDULE)
                     except: pass
                 await client.delete_messages(None, status_msg)
-
-        # 2. Якщо результат - це текст помилки (Бос має знати)
         else:
-            await client.edit_message(status_msg, f"❌ **Помилка розпізнавання:**\nGemini відповів не по плану.\n\n`{str(result)}`")
+            await client.edit_message(status_msg, f"❌ **Все ще помилка:**\n`{str(result)}`\nСпробуйте пізніше або перевірте ключ.")
 
 async def startup_check():
-    try: await client.send_message(MAIN_ACCOUNT_USERNAME, "🟢 **STRUM DEBUG:** Режим повної діагностики увімкнено.")
+    try: await client.send_message(MAIN_ACCOUNT_USERNAME, "🟢 **STRUM FINAL:** Алгоритм пошуку API оновлено.")
     except: pass
 
 with client:
