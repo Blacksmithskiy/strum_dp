@@ -25,7 +25,8 @@ SESSION_STRING = os.environ['TELEGRAM_SESSION']
 GEMINI_KEY = os.environ['GEMINI_API_KEY']
 GOOGLE_TOKEN = os.environ['GOOGLE_TOKEN_JSON']
 
-SOURCE_CHANNELS = ['dtek_ua', 'avariykaaa']
+SOURCE_CHANNELS = ['dtek_ua', 'avariykaaa', 'me']
+
 REGION_TAG = "дніпропетровщина"
 PROVIDER_TAG = "дтек"
 IGNORE_PROVIDER = "цек"
