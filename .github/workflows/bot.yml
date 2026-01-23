@@ -1,11 +1,10 @@
 name: STRUM AI AGENT 24/7
 
 on:
-  workflow_dispatch:      # Кнопка ручного запуска
+  workflow_dispatch:
   schedule:
-    - cron: "0 */6 * * *" # Автоматичний перезапуск кожні 6 годин
+    - cron: "0 */6 * * *"
 
-# 🔥 ГОЛОВНИЙ ЗАХИСТ: Вбиває старі копії при запуску нових
 concurrency:
   group: production-bot
   cancel-in-progress: true
@@ -13,7 +12,7 @@ concurrency:
 jobs:
   run-bot:
     runs-on: ubuntu-latest
-    timeout-minutes: 360  # Ліміт 6 годин
+    timeout-minutes: 360
     
     steps:
       - uses: actions/checkout@v3
@@ -24,8 +23,10 @@ jobs:
           python-version: '3.10'
           
       - name: Install dependencies
+        # ДОДАНО -U (Upgrade) і явну версію для генеративного ШІ
         run: |
-          pip install telethon google-generativeai google-auth google-auth-oauthlib google-auth-httplib2 google-api-python-client pillow python-dateutil
+          pip install -U telethon google-auth google-auth-oauthlib google-auth-httplib2 google-api-python-client pillow python-dateutil
+          pip install -U "google-generativeai>=0.8.3"
           
       - name: Run AI Agent
         env:
