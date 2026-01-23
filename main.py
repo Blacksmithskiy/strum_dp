@@ -34,7 +34,8 @@ NOISE_WORDS = ['вода', 'водоканал', 'труб', 'каналізац
 EMERGENCY_WORDS = ['екстрені', 'екстрене', 'скасовані графіки']
 
 genai.configure(api_key=GEMINI_KEY)
-model = genai.GenerativeModel('gemini-1.5-flash-latest')
+model = genai.GenerativeModel('gemini-1.5-flash-001')
+
 
 async def get_tasks_service():
     creds_dict = json.loads(GOOGLE_TOKEN)
