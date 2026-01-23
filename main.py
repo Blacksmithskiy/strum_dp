@@ -60,11 +60,11 @@ def ask_gemini_persistent(photo_path, text):
     payload = {"contents": [{"parts": [{"text": prompt}, {"inline_data": {"mime_type": "image/jpeg", "data": image_data}}]}]}
     full_url = f"{url}?key={GEMINI_KEY}"
 
-    # Робимо 3 спроби з великими паузами
-    for attempt in range(1, 4):
+    # 10 СПРОБ (Це дасть нам до 10 хвилин наполегливості)
+    for attempt in range(1, 11):
         try:
-            print(f"🔄 Запит до AI (Спроба {attempt})...")
-            response = requests.post(full_url, json=payload, headers={'Content-Type': 'application/json'}, timeout=40)
+            print(f"🔄 Спроба {attempt}/10...")
+            response = requests.post(full_url, json=payload, headers={'Content-Type': 'application/json'}, timeout=60)
             
             if response.status_code == 200:
                 try:
@@ -75,17 +75,17 @@ def ask_gemini_persistent(photo_path, text):
                 except: return [] 
             
             elif response.status_code == 429:
-                print(f"⏳ Google перегрівся. Чекаю 20 сек...")
-                time.sleep(20) # Пауза
+                print(f"⏳ Перегрів (429). Чекаю 60 сек...")
+                time.sleep(60) # Чекаємо повну хвилину
                 continue
             
             else:
                 print(f"Помилка {response.status_code}")
-                time.sleep(5)
+                time.sleep(10)
                 continue
                 
         except Exception as e:
-            time.sleep(5)
+            time.sleep(10)
             continue
 
     return "TIMEOUT"
@@ -101,7 +101,6 @@ async def handler(event):
     if chat_title == 'avariykaaa' and 'цек' in text: return 
     if any(w in text for w in NOISE_WORDS) and PROVIDER_TAG not in text: return
 
-    # ЕКСТРЕНІ
     if any(w in text for w in EMERGENCY_WORDS):
         msg = "🚨 **ТРИВОГА: ЕКСТРЕНІ ВІДКЛЮЧЕННЯ!**"
         await client.send_message(MAIN_ACCOUNT_USERNAME, msg, file=IMG_EMERGENCY)
@@ -109,15 +108,13 @@ async def handler(event):
         except: pass
         return
 
-    # ГРАФІКИ
     if event.message.photo:
-        # Перевіряємо, чи бот не зайнятий
+        # Перевірка черги
         if processing_lock.locked():
-            await client.send_message(MAIN_ACCOUNT_USERNAME, "⏳ **В черзі:** Обробляю попередній графік, зачекайте...")
+            await client.send_message(MAIN_ACCOUNT_USERNAME, "⏳ **В черзі:** Попередній графік ще обробляється. Я повідомлю, коли звільнюсь.")
         
-        # Блокуємо бота для інших запитів
         async with processing_lock:
-            status_msg = await client.send_message(MAIN_ACCOUNT_USERNAME, "🛡 **Gemini 2.0:** Почав аналіз...")
+            status_msg = await client.send_message(MAIN_ACCOUNT_USERNAME, "🛡 **Gemini 2.0:** Аналізую... (Це може зайняти час через ліміти Google)")
             
             path = await event.message.download_media()
             result = await asyncio.to_thread(ask_gemini_persistent, path, event.message.message)
@@ -145,11 +142,13 @@ async def handler(event):
                         try: await client.send_message(CHANNEL_USERNAME, msg, file=IMG_SCHEDULE)
                         except: pass
                     await client.delete_messages(None, status_msg)
+            elif result == "TIMEOUT":
+                 await client.edit_message(status_msg, "❌ **Ліміт Google:** На жаль, сервер перевантажений (429) більше 10 хвилин. Спробуйте пізніше.")
             else:
-                await client.edit_message(status_msg, f"❌ **Збій:** Не зміг отримати відповідь від Google (Timeout).")
+                await client.edit_message(status_msg, f"❌ **Збій:** {str(result)}")
 
 async def startup_check():
-    try: await client.send_message(MAIN_ACCOUNT_USERNAME, "🟢 **STRUM:** Система черги активна. Готовий.")
+    try: await client.send_message(MAIN_ACCOUNT_USERNAME, "🟢 **STRUM:** Режим 'Бронетранспортер' (60сек/10спроб) увімкнено.")
     except: pass
 
 with client:
