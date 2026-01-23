@@ -39,16 +39,9 @@ async def get_tasks_service():
     creds = Credentials.from_authorized_user_info(creds_dict)
     return build('tasks', 'v1', credentials=creds)
 
-# 🔥 РОЗУМНА ФУНКЦІЯ З ПОВТОРОМ І ТОЧНОЮ МОДЕЛЛЮ
 def ask_gemini_smart(photo_path, text):
-    # Пріоритет: стабільна 002 -> швидка 001 -> експериментальна 2.0
-    models_to_try = [
-        "gemini-1.5-flash-002",  # Найновіша стабільна
-        "gemini-1.5-flash-001",  # Попередня стабільна
-        "gemini-2.0-flash-exp"   # Запасна (але лімітована)
-    ]
+    models_to_try = ["gemini-1.5-flash-002", "gemini-1.5-flash-001", "gemini-2.0-flash-exp"]
     
-    # Кодуємо фото
     try:
         with open(photo_path, "rb") as image_file:
             image_data = base64.b64encode(image_file.read()).decode("utf-8")
@@ -66,52 +59,28 @@ def ask_gemini_smart(photo_path, text):
     """
     
     payload = {
-        "contents": [{
-            "parts": [
-                {"text": prompt},
-                {"inline_data": {
-                    "mime_type": "image/jpeg",
-                    "data": image_data
-                }}
-            ]
-        }]
+        "contents": [{"parts": [{"text": prompt}, {"inline_data": {"mime_type": "image/jpeg", "data": image_data}}]}]
     }
 
-    # Цикл спроб
     for model in models_to_try:
         print(f"🤖 Пробую модель: {model}...")
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={GEMINI_KEY}"
-        
-        # Робимо до 2 спроб на кожну модель (якщо 429)
         for attempt in range(2):
             try:
                 response = requests.post(url, json=payload, headers={'Content-Type': 'application/json'}, timeout=30)
-                
                 if response.status_code == 200:
-                    print(f"✅ УСПІХ! Спрацювала {model}")
                     try:
                         result = response.json()
                         raw_text = result['candidates'][0]['content']['parts'][0]['text']
                         clean_res = raw_text.replace('```json', '').replace('```', '').strip()
                         return json.loads(clean_res)
-                    except:
-                        return [] # Помилка парсингу
-                        
+                    except: return []
                 elif response.status_code == 429:
-                    print(f"⏳ Перевищено ліміт (429) на {model}. Чекаю 5 сек...")
-                    time.sleep(5) # Чекаємо і пробуємо ще раз
+                    time.sleep(5)
                     continue
-                elif response.status_code == 404:
-                    print(f"❌ Модель {model} не знайдена. Йду далі.")
-                    break # Немає сенсу пробувати цю модель ще раз
-                else:
-                    print(f"❌ Помилка {response.status_code}: {response.text}")
-                    break
-            except Exception as e:
-                print(f"❌ Збій мережі: {e}")
-                break
-                
-    print("💀 Всі моделі зайняті або недоступні.")
+                elif response.status_code == 404: break
+                else: break
+            except: break
     return []
 
 client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
@@ -123,23 +92,25 @@ async def handler(event):
     
     print(f"\n📩 ОТРИМАНО: {chat_title}")
 
-    # Фільтри
     if chat_title == 'dtek_ua' and REGION_TAG not in text: return
     if chat_title == 'avariykaaa' and IGNORE_PROVIDER in text: return
     if any(w in text for w in NOISE_WORDS) and PROVIDER_TAG not in text: return
 
-    # Екстрені
+    # === БЛОК ТРИВОГИ (ВИПРАВЛЕНО) ===
     if any(w in text for w in EMERGENCY_WORDS):
         msg = "🚨 **ТРИВОГА: ЕКСТРЕНІ ВІДКЛЮЧЕННЯ!**"
+        # 1. Пишемо БОСУ
         await client.send_message(MAIN_ACCOUNT_USERNAME, msg, file=IMG_EMERGENCY)
+        # 2. Пишемо в КАНАЛ (Додано!)
+        try: await client.send_message(CHANNEL_ID, msg, file=IMG_EMERGENCY)
+        except Exception as e: print(f"Помилка каналу: {e}")
         return
 
-    # Графіки
+    # === БЛОК ГРАФІКІВ ===
     if event.message.photo:
-        print(f"📸 Фото знайдено. Запускаю Smart-аналіз...")
-        # Сповіщення користувачу, що процес пішов
-        if chat_title == 'Unknown/Me': # Тільки для тестів
-             await client.send_message(MAIN_ACCOUNT_USERNAME, "⚙️ Отримав графік. Шукаю вільну модель...")
+        print(f"📸 Фото знайдено. Аналіз...")
+        if chat_title == 'Unknown/Me':
+             await client.send_message(MAIN_ACCOUNT_USERNAME, "⚙️ Отримав графік. Аналізую...")
 
         path = await event.message.download_media()
         schedule = await asyncio.to_thread(ask_gemini_smart, path, event.message.message)
@@ -160,15 +131,18 @@ async def handler(event):
                 except: pass
 
                 msg = f"⚡️ **Світла не буде з {start_dt.strftime('%H:%M')} до {end_dt.strftime('%H:%M')}**\n(Група {MY_GROUP})."
+                
+                # 1. Пишемо БОСУ
                 await client.send_message(MAIN_ACCOUNT_USERNAME, msg, file=IMG_SCHEDULE)
+                # 2. Пишемо в КАНАЛ
                 try: await client.send_message(CHANNEL_ID, msg, file=IMG_SCHEDULE)
-                except: pass
+                except Exception as e: print(f"Помилка каналу: {e}")
         else:
             if chat_title == 'Unknown/Me':
-                await client.send_message(MAIN_ACCOUNT_USERNAME, "⚠️ Не вдалося розпізнати графік (всі моделі зайняті або графік не ваш).")
+                await client.send_message(MAIN_ACCOUNT_USERNAME, "⚠️ Не вдалося розпізнати графік.")
 
 async def startup_check():
-    try: await client.send_message(MAIN_ACCOUNT_USERNAME, "🟢 **SMART SYSTEM:** Оновлено. Готовий до роботи.")
+    try: await client.send_message(MAIN_ACCOUNT_USERNAME, "🟢 **STRUM FIXED:** Канал підключено. Акаунт перевірте.")
     except: pass
 
 with client:
