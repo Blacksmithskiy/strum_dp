@@ -136,5 +136,14 @@ async def handler(event):
         print("ℹ️ У повідомленні немає фото.")
 
 print(f"🚀 STRUM DEBUG: Слухаю {SOURCE_CHANNELS}. Пиши в 'Збережене' для тесту!")
+
+# === МАЯК ЖИЗНИ ===
+async def startup_check():
+    try:
+        await client.send_message(MAIN_ACCOUNT_USERNAME, "🟢 **СИСТЕМА СТАРТУВАЛА!**\nЯ в мережі і готовий до тестів.")
+    except Exception as e:
+        print(f"Помилка відправки стартового повідомлення: {e}")
+
 with client:
+    client.loop.run_until_complete(startup_check()) # Відправляє "Привіт"
     client.run_until_disconnected()
