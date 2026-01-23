@@ -32,13 +32,15 @@ PROVIDER_TAG = "дтек"
 NOISE_WORDS = ['вода', 'водоканал', 'труб', 'каналізац', 'опалення']
 EMERGENCY_WORDS = ['екстрені', 'екстрене', 'скасовані графіки']
 
+# Глобальний замок для черги
+processing_lock = asyncio.Lock()
+
 async def get_tasks_service():
     creds_dict = json.loads(GOOGLE_TOKEN)
     creds = Credentials.from_authorized_user_info(creds_dict)
     return build('tasks', 'v1', credentials=creds)
 
 def ask_gemini_persistent(photo_path, text):
-    # Тільки одна модель, яка точно існує
     url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent"
     
     try:
@@ -58,11 +60,11 @@ def ask_gemini_persistent(photo_path, text):
     payload = {"contents": [{"parts": [{"text": prompt}, {"inline_data": {"mime_type": "image/jpeg", "data": image_data}}]}]}
     full_url = f"{url}?key={GEMINI_KEY}"
 
-    # ЦИКЛ НАПОЛЕГЛИВОСТІ (5 спроб з очікуванням)
-    for attempt in range(1, 6):
+    # Робимо 3 спроби з великими паузами
+    for attempt in range(1, 4):
         try:
-            print(f"🔄 Спроба {attempt}/5...")
-            response = requests.post(full_url, json=payload, headers={'Content-Type': 'application/json'}, timeout=30)
+            print(f"🔄 Запит до AI (Спроба {attempt})...")
+            response = requests.post(full_url, json=payload, headers={'Content-Type': 'application/json'}, timeout=40)
             
             if response.status_code == 200:
                 try:
@@ -70,25 +72,23 @@ def ask_gemini_persistent(photo_path, text):
                     raw_text = result['candidates'][0]['content']['parts'][0]['text']
                     clean_res = raw_text.replace('```json', '').replace('```', '').strip()
                     return json.loads(clean_res)
-                except: return [] # Помилка парсингу, але відповідь є
+                except: return [] 
             
             elif response.status_code == 429:
-                # ГОЛОВНЕ: Якщо перегрів - чекаємо 30 секунд
-                print(f"⏳ Перегрів (429). Чекаю 30 сек...")
-                time.sleep(30)
+                print(f"⏳ Google перегрівся. Чекаю 20 сек...")
+                time.sleep(20) # Пауза
                 continue
             
-            elif response.status_code == 404:
-                return f"CRITICAL: Model Not Found (404)"
-            
             else:
-                return f"HTTP Error {response.status_code}"
+                print(f"Помилка {response.status_code}")
+                time.sleep(5)
+                continue
                 
         except Exception as e:
             time.sleep(5)
             continue
 
-    return "TIMEOUT: Google зайнятий, спробуйте пізніше."
+    return "TIMEOUT"
 
 client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
 
@@ -98,7 +98,7 @@ async def handler(event):
     chat_title = event.chat.username if event.chat and hasattr(event.chat, 'username') else "Unknown/Me"
     
     if chat_title == 'dtek_ua' and REGION_TAG not in text: return
-    if chat_title == 'avariykaaa' and 'цек' in text: return # Fix: hardcoded 'цек'
+    if chat_title == 'avariykaaa' and 'цек' in text: return 
     if any(w in text for w in NOISE_WORDS) and PROVIDER_TAG not in text: return
 
     # ЕКСТРЕНІ
@@ -111,40 +111,45 @@ async def handler(event):
 
     # ГРАФІКИ
     if event.message.photo:
-        status_msg = await client.send_message(MAIN_ACCOUNT_USERNAME, "🛡 **Gemini 2.0:** Аналізую (може зайняти хвилину)...")
+        # Перевіряємо, чи бот не зайнятий
+        if processing_lock.locked():
+            await client.send_message(MAIN_ACCOUNT_USERNAME, "⏳ **В черзі:** Обробляю попередній графік, зачекайте...")
         
-        path = await event.message.download_media()
-        # Запускаємо наполегливу функцію
-        result = await asyncio.to_thread(ask_gemini_persistent, path, event.message.message)
-        os.remove(path)
-        
-        if isinstance(result, list):
-            if not result:
-                await client.edit_message(status_msg, "✅ **Чисто:** Графік є, але ваша група 1.1 зі світлом.")
+        # Блокуємо бота для інших запитів
+        async with processing_lock:
+            status_msg = await client.send_message(MAIN_ACCOUNT_USERNAME, "🛡 **Gemini 2.0:** Почав аналіз...")
+            
+            path = await event.message.download_media()
+            result = await asyncio.to_thread(ask_gemini_persistent, path, event.message.message)
+            os.remove(path)
+            
+            if isinstance(result, list):
+                if not result:
+                    await client.edit_message(status_msg, "✅ **Чисто:** Графік розпізнано, ваша група зі світлом.")
+                else:
+                    schedule = result
+                    service = await get_tasks_service()
+                    for entry in schedule:
+                        start_dt = parser.parse(entry['start'])
+                        end_dt = parser.parse(entry['end'])
+                        task = {
+                            'title': f"💡 СВІТЛА НЕ БУДЕ (Гр. {MY_GROUP})",
+                            'notes': f"{start_dt.strftime('%H:%M')} - {end_dt.strftime('%H:%M')}",
+                            'due': (start_dt - timedelta(minutes=15)).isoformat() + 'Z'
+                        }
+                        try: service.tasks().insert(tasklist='@default', body=task).execute()
+                        except: pass
+                        
+                        msg = f"⚡️ **Світла не буде з {start_dt.strftime('%H:%M')} до {end_dt.strftime('%H:%M')}**\n(Група {MY_GROUP})."
+                        await client.send_message(MAIN_ACCOUNT_USERNAME, msg, file=IMG_SCHEDULE)
+                        try: await client.send_message(CHANNEL_USERNAME, msg, file=IMG_SCHEDULE)
+                        except: pass
+                    await client.delete_messages(None, status_msg)
             else:
-                schedule = result
-                service = await get_tasks_service()
-                for entry in schedule:
-                    start_dt = parser.parse(entry['start'])
-                    end_dt = parser.parse(entry['end'])
-                    task = {
-                        'title': f"💡 СВІТЛА НЕ БУДЕ (Гр. {MY_GROUP})",
-                        'notes': f"{start_dt.strftime('%H:%M')} - {end_dt.strftime('%H:%M')}",
-                        'due': (start_dt - timedelta(minutes=15)).isoformat() + 'Z'
-                    }
-                    try: service.tasks().insert(tasklist='@default', body=task).execute()
-                    except: pass
-                    
-                    msg = f"⚡️ **Світла не буде з {start_dt.strftime('%H:%M')} до {end_dt.strftime('%H:%M')}**\n(Група {MY_GROUP})."
-                    await client.send_message(MAIN_ACCOUNT_USERNAME, msg, file=IMG_SCHEDULE)
-                    try: await client.send_message(CHANNEL_USERNAME, msg, file=IMG_SCHEDULE)
-                    except: pass
-                await client.delete_messages(None, status_msg)
-        else:
-            await client.edit_message(status_msg, f"❌ **Збій:** {str(result)}")
+                await client.edit_message(status_msg, f"❌ **Збій:** Не зміг отримати відповідь від Google (Timeout).")
 
 async def startup_check():
-    try: await client.send_message(MAIN_ACCOUNT_USERNAME, "🟢 **STRUM:** Режим 'Хатіко' (Авто-повтор) увімкнено.")
+    try: await client.send_message(MAIN_ACCOUNT_USERNAME, "🟢 **STRUM:** Система черги активна. Готовий.")
     except: pass
 
 with client:
