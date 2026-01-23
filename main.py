@@ -34,7 +34,8 @@ NOISE_WORDS = ['вода', 'водоканал', 'труб', 'каналізац
 EMERGENCY_WORDS = ['екстрені', 'екстрене', 'скасовані графіки']
 
 genai.configure(api_key=GEMINI_KEY)
-model = genai.GenerativeModel('gemini-pro-vision')
+model = genai.GenerativeModel('gemini-1.5-flash')
+
 
 
 
