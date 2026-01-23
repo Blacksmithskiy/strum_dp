@@ -23,7 +23,7 @@ jobs:
           python-version: '3.10'
           
       - name: Install dependencies
-        # ДОДАНО -U (Upgrade) і явну версію для генеративного ШІ
+        # 🔥 ОСЬ ТУТ МИ СИЛОЮ ОНОВЛЮЄМО БІБЛІОТЕКУ 🔥
         run: |
           pip install -U telethon google-auth google-auth-oauthlib google-auth-httplib2 google-api-python-client pillow python-dateutil
           pip install -U "google-generativeai>=0.8.3"
