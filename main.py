@@ -27,28 +27,23 @@ GEMINI_KEY = os.environ['GEMINI_API_KEY']
 GOOGLE_TOKEN = os.environ['GOOGLE_TOKEN_JSON']
 
 IMG_SCHEDULE = "https://arcanavisio.com/wp-content/uploads/2026/01/MAIN.jpg"
-IMG_UPDATE = "https://arcanavisio.com/wp-content/uploads/2026/01/UPDATE.jpg" # (Якщо немає - використає звичайну)
+IMG_UPDATE = "https://arcanavisio.com/wp-content/uploads/2026/01/UPDATE.jpg"
 IMG_EMERGENCY = "https://arcanavisio.com/wp-content/uploads/2026/01/EXTRA.jpg"
 IMG_ALARM = "https://arcanavisio.com/wp-content/uploads/2026/01/ALARM.jpg"
 IMG_ALL_CLEAR = "https://arcanavisio.com/wp-content/uploads/2026/01/REBOUND.jpg"
 
 # === СЛОВНИКИ (UA + RU) ===
-# 1. Регіон (щоб розуміти, що це про нас)
 REGION_KEYWORDS = [
-    'дніпропетровщина', 'дніпро', 'дтек',  # UA
-    'днепропетровщина', 'днепр', 'дтэк', 'днепропетровская' # RU
+    'дніпропетровщина', 'дніпро', 'дтек', 
+    'днепропетровщина', 'днепр', 'дтэк', 'днепропетровская'
 ]
-
-# 2. Екстрені відключення
 EMERGENCY_WORDS = [
-    'екстрені', 'екстрене', 'скасовані графіки', # UA
-    'экстренные', 'экстренное', 'отмена графиков' # RU
+    'екстрені', 'екстрене', 'скасовані графіки', 
+    'экстренные', 'экстренное', 'отмена графиков'
 ]
-
-# 3. Слова-маркери змін (для заголовка 🔄)
 UPDATE_WORDS = [
-    'зміни', 'оновлення', 'змінено', 'оновлено', 'корегування', # UA
-    'изменения', 'обновление', 'корректировка', 'меняется', 'правки' # RU
+    'зміни', 'оновлення', 'змінено', 'оновлено', 'корегування', 
+    'изменения', 'обновление', 'корректировка', 'меняется', 'правки'
 ]
 
 processing_lock = asyncio.Lock()
@@ -62,21 +57,15 @@ async def get_tasks_service():
 def parse_text_all_groups(text):
     schedule = []
     lines = text.split('\n')
-    
     for line in lines:
         line_lower = line.lower().strip()
-        # Шукаємо цифри 1.1, 2.1...
         found_groups = re.findall(r'\b(\d\.\d)\b', line_lower)
-        
         if found_groups:
-            # Шукаємо час (12:00 - 14:00)
             times = re.findall(r'(\d{1,2}:\d{2}).*?(\d{1,2}:\d{2})', line_lower)
             if times:
                 today = datetime.now().strftime('%Y-%m-%d')
                 for gr in found_groups:
-                    # Фільтр помилкових спрацювань (коли група = час)
                     if gr in [t[0] for t in times] or gr in [t[1] for t in times]: continue
-                    
                     for t in times:
                         start_str, end_str = t
                         schedule.append({
@@ -159,28 +148,24 @@ async def handler(event):
         chat_uname = event.chat.username.lower()
     
     if not is_siren_source and chat_uname not in allowed_channels: return 
-    
-    # Фільтр регіону (оновлений)
-    # Якщо це офіційний канал ДТЕК - перевіряємо, чи згадується Дніпро/Область (UA/RU)
-    if chat_uname == 'dtek_ua':
-        if not any(k in text for k in REGION_KEYWORDS): return
+    if chat_uname == 'dtek_ua' and not any(k in text for k in REGION_KEYWORDS): return
 
     # === 3. ЕКСТРЕНІ ===
     if any(w in text for w in EMERGENCY_WORDS):
-        msg = "🚨 **ТРИВОГА: ЕКСТРЕНІ ВІДКЛЮЧЕННЯ!**\n(Экстренные отключения)"
+        msg = "🚨 **ТРИВОГА: ЕКСТРЕНІ ВІДКЛЮЧЕННЯ!**"
         await client.send_message(MAIN_ACCOUNT_USERNAME, msg, file=IMG_EMERGENCY)
         try: await client.send_message(CHANNEL_USERNAME, msg, file=IMG_EMERGENCY)
         except: pass
         return
 
-    # === 4. ТЕКСТ (З ПІДТРИМКОЮ RU) ===
+    # === 4. ТЕКСТ (З ПІДТРИМКОЮ RU + UA) ===
     if (re.search(r'\d\.\d', text)) and (re.search(r'\d{1,2}:\d{2}', text)):
         schedule = parse_text_all_groups(event.message.message)
         
-        # Перевіряємо слова-маркери змін (UA + RU)
         is_update = any(w in text for w in UPDATE_WORDS)
         header_icon = "🔄" if is_update else "⚡️"
         header_text = "**ОНОВЛЕННЯ ГРАФІКУ:**" if is_update else "**Графік відключень:**"
+        img_to_use = IMG_UPDATE if is_update else IMG_SCHEDULE
         
         if schedule:
             await client.send_message(MAIN_ACCOUNT_USERNAME, f"{header_icon} **Текст:** Знайдено {len(schedule)} груп (Зміни: {is_update})")
@@ -192,17 +177,27 @@ async def handler(event):
                 end_dt = parser.parse(entry['end'])
                 grp = entry['group']
                 
-                # Google Tasks (Тільки моя група)
+                # Google Tasks (Безпечний запис)
                 if grp == MY_PERSONAL_GROUP:
                     notif_time = start_dt - timedelta(hours=2) - timedelta(minutes=10)
-                    task_title = f"🔄 ИЗМЕНЕНИЕ: Света не будет" if is_update else f"💡 СВЕТА НЕ БУДЕТ"
-                    task = {'title': f"{task_title} (Гр. {grp})", 'notes': f"{start_dt.strftime('%H:%M')} - {end_dt.strftime('%H:%M')}", 'due': notif_time.isoformat() + 'Z'}
+                    
+                    # Формуємо змінні окремо, щоб не було помилок синтаксису
+                    base_title = "🔄 ИЗМЕНЕНИЕ" if is_update else "💡 СВЕТА НЕ БУДЕТ"
+                    full_title = f"{base_title} (Гр. {grp})"
+                    time_range = f"{start_dt.strftime('%H:%M')} - {end_dt.strftime('%H:%M')}"
+                    due_iso = notif_time.isoformat() + 'Z'
+                    
+                    task = {
+                        'title': full_title,
+                        'notes': time_range,
+                        'due': due_iso
+                    }
                     try: service.tasks().insert(tasklist='@default', body=task).execute()
                     except: pass
                 
                 # Telegram Post
                 msg = f"{header_icon} {header_text}\n**Група {grp}:** {start_dt.strftime('%H:%M')} - {end_dt.strftime('%H:%M')}"
-                try: await client.send_message(CHANNEL_USERNAME, msg, file=IMG_SCHEDULE)
+                try: await client.send_message(CHANNEL_USERNAME, msg, file=img_to_use)
                 except: pass
             return
 
@@ -224,4 +219,26 @@ async def handler(event):
                         grp = entry.get('group', '?')
                         if grp == MY_PERSONAL_GROUP:
                             notif_time = start_dt - timedelta(hours=2) - timedelta(minutes=10)
-                            task = {'title': f"💡 СВЕТА НЕ БУДЕТ (Гр. {grp})", 'notes': f
+                            task = {'title': f"💡 СВЕТА НЕ БУДЕТ (Гр. {grp})", 'notes': f"{start_dt.strftime('%H:%M')} - {end_dt.strftime('%H:%M')}", 'due': notif_time.isoformat() + 'Z'}
+                            try: service.tasks().insert(tasklist='@default', body=task).execute()
+                            except: pass
+                        msg = f"⚡️ **Група {grp}:** Світла не буде з {start_dt.strftime('%H:%M')} до {end_dt.strftime('%H:%M')}"
+                        try: await client.send_message(CHANNEL_USERNAME, msg, file=IMG_SCHEDULE)
+                        except: pass
+                    await client.delete_messages(None, status_msg)
+                else: await client.edit_message(status_msg, "✅ **Чисто:** Не бачу графіків.")
+            else: await client.edit_message(status_msg, f"❌ **Помилка:** {str(result)}")
+
+async def startup_check():
+    global REAL_SIREN_ID
+    try:
+        await client(JoinChannelRequest(SIREN_CHANNEL_USER))
+        entity = await client.get_entity(SIREN_CHANNEL_USER)
+        REAL_SIREN_ID = int(f"-100{entity.id}")
+        await client.send_message(MAIN_ACCOUNT_USERNAME, f"🟢 **STRUM FIXED:**\nСинтаксис виправлено.\nРосійська мова додана.")
+    except:
+        await client.send_message(MAIN_ACCOUNT_USERNAME, "⚠️ Сирена: авто-пошук не вдався.")
+
+with client:
+    client.loop.run_until_complete(startup_check())
+    client.run_until_disconnected()
