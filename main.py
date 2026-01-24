@@ -9,14 +9,15 @@ from datetime import datetime, timedelta
 from dateutil import parser
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
+from telethon.tl.functions.channels import JoinChannelRequest # Імпорт для авто-підписки
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
-# === НАСТРОЙКИ ===
+# === НАЛАШТУВАННЯ ===
 MY_PERSONAL_GROUP = "1.1"  
 MAIN_ACCOUNT_USERNAME = "@nemovisio" 
 CHANNEL_USERNAME = "@strum_dp"
-SIREN_CHANNEL_USER = "sirena_dp" # Имя канала для поиска
+SIREN_CHANNEL_USER = "sirena_dp" 
 
 # === ЗМІННІ ===
 API_ID = int(os.environ['API_ID'])
@@ -31,16 +32,12 @@ IMG_EMERGENCY = "https://arcanavisio.com/wp-content/uploads/2026/01/EXTRA.jpg"
 IMG_ALARM = "https://arcanavisio.com/wp-content/uploads/2026/01/ALARM.jpg"
 IMG_ALL_CLEAR = "https://arcanavisio.com/wp-content/uploads/2026/01/REBOUND.jpg"
 
-# Каналы (sirena_dp добавляем динамически ниже)
-SOURCE_CHANNELS = ['dtek_ua', 'avariykaaa', 'avariykaaa_dnepr_radar', 'me', 'sirena_dp'] 
-
 REGION_TAG = "дніпропетровщина"
 EMERGENCY_WORDS = ['екстрені', 'екстрене', 'скасовані графіки']
 
-# Глобальный замок
+# Глобальний замок
 processing_lock = asyncio.Lock()
-# Сюда запишем реальный ID сирены
-REAL_SIREN_ID = 0 
+REAL_SIREN_ID = None
 
 async def get_tasks_service():
     creds_dict = json.loads(GOOGLE_TOKEN)
@@ -94,21 +91,25 @@ def ask_gemini_all_groups(photo_path, text):
 
 client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
 
-@client.on(events.NewMessage(chats=SOURCE_CHANNELS))
+# !!! ВАЖЛИВО: Слухаємо ВСІ вхідні повідомлення (без фільтрів)
+@client.on(events.NewMessage())
 async def handler(event):
     text = (event.message.message or "").lower()
-    # Получаем ID чата откуда пришло
-    incoming_chat_id = event.chat_id 
-    chat_title = event.chat.username if event.chat and hasattr(event.chat, 'username') else "Unknown"
+    chat_id = event.chat_id
     
-    # ДЕБАГ: Пишем владельцу, если это сообщение от сирены, но мы его не узнали
-    # (Раскомментируйте строку ниже, если снова не сработает)
-    # if "тривога" in text: await client.send_message(MAIN_ACCOUNT_USERNAME, f"DEBUG: Вижу тривогу от ID: {incoming_chat_id}")
+    # Отримуємо ім'я каналу (якщо є)
+    chat_username = ""
+    if event.chat and hasattr(event.chat, 'username') and event.chat.username:
+        chat_username = event.chat.username.lower()
 
-    # === 1. СИРЕНА (ПРОВЕРЯЕМ ПО ID, А НЕ ПО ИМЕНИ) ===
-    is_siren = (incoming_chat_id == REAL_SIREN_ID) or (chat_title == SIREN_CHANNEL_USER) or ("test_siren" in text and chat_title == "me")
-    
-    if is_siren:
+    # === 1. ЛОГІКА СИРЕНИ (Покращена) ===
+    # Спрацьовує якщо:
+    # АБО це канал sirena_dp (по ID або username)
+    # АБО це ми самі пишемо "test_siren"
+    is_siren_channel = (chat_username == "sirena_dp") or (chat_id == REAL_SIREN_ID)
+    is_test = ("test_siren" in text and chat_username == "me") # Для тесту в Saved Messages
+
+    if is_siren_channel or is_test:
         if "тривога" in text:
             msg = "🔴 **УВАГА! ПОВІТРЯНА ТРИВОГА!**\n\nВсім пройти в укриття!"
             await client.send_message(CHANNEL_USERNAME, msg, file=IMG_ALARM)
@@ -116,6 +117,12 @@ async def handler(event):
             msg = "🟢 **ВІДБІЙ ПОВІТРЯНОЇ ТРИВОГИ!**"
             await client.send_message(CHANNEL_USERNAME, msg, file=IMG_ALL_CLEAR)
         return
+
+    # === Фільтри для інших каналів ===
+    # Якщо це НЕ сирена, то ми ігноруємо все, крім наших робочих каналів
+    allowed_channels = ['dtek_ua', 'avariykaaa', 'avariykaaa_dnepr_radar', 'me']
+    if chat_username not in allowed_channels:
+        return # Ігноруємо чужі канали, щоб не спамити
 
     # === 2. ЕКСТРЕНІ ===
     if any(w in text for w in EMERGENCY_WORDS):
@@ -125,11 +132,10 @@ async def handler(event):
         except: pass
         return
 
-    # Фильтры
-    if chat_title == 'dtek_ua' and REGION_TAG not in text: return
-    if chat_title == 'avariykaaa' and 'цек' in text: return 
+    if chat_username == 'dtek_ua' and REGION_TAG not in text: return
+    if chat_username == 'avariykaaa' and 'цек' in text: return 
 
-    # === 3. ТЕКСТ (ВСЕ ГРУППЫ) ===
+    # === 3. ТЕКСТ ===
     if (re.search(r'\d\.\d', text)) and (re.search(r'\d{1,2}:\d{2}', text)):
         schedule = parse_text_all_groups(event.message.message)
         if schedule:
@@ -150,7 +156,7 @@ async def handler(event):
                 except: pass
             return
 
-    # === 4. ФОТО (ВСЕ ГРУППЫ) ===
+    # === 4. ФОТО ===
     if event.message.photo:
         if processing_lock.locked(): await client.send_message(MAIN_ACCOUNT_USERNAME, "⏳ **Черга:** Чекаю...")
         async with processing_lock:
@@ -178,16 +184,20 @@ async def handler(event):
                 else: await client.edit_message(status_msg, "✅ **Чисто:** Не бачу графіків.")
             else: await client.edit_message(status_msg, f"❌ **Помилка:** {str(result)}")
 
-# === АВТО-ОПРЕДЕЛЕНИЕ ID СИРЕНЫ ===
+# === АВТО-ПІДПИСКА ===
 async def startup_check():
     global REAL_SIREN_ID
     try:
-        # Пытаемся найти канал по имени
-        siren_entity = await client.get_entity(SIREN_CHANNEL_USER)
-        REAL_SIREN_ID = siren_entity.id
-        await client.send_message(MAIN_ACCOUNT_USERNAME, f"🟢 **STRUM:** Канал сирени знайдено!\nID: `{REAL_SIREN_ID}`\nТепер я його не пропущу.")
+        # 1. Примусово підписуємось на канал
+        await client(JoinChannelRequest(SIREN_CHANNEL_USER))
+        
+        # 2. Отримуємо його ID
+        entity = await client.get_entity(SIREN_CHANNEL_USER)
+        REAL_SIREN_ID = entity.id
+        
+        await client.send_message(MAIN_ACCOUNT_USERNAME, f"🟢 **STRUM FIXED:**\nПідписався на `{SIREN_CHANNEL_USER}`\nID: `{REAL_SIREN_ID}`\nФільтри знято (слухаю все).")
     except Exception as e:
-        await client.send_message(MAIN_ACCOUNT_USERNAME, f"⚠️ **УВАГА:** Не можу знайти канал {SIREN_CHANNEL_USER}.\nПереконайтеся, що ви на нього підписані!\nПомилка: {e}")
+        await client.send_message(MAIN_ACCOUNT_USERNAME, f"🔴 **ПОМИЛКА СИРЕНИ:** Не зміг підписатися на канал.\n{str(e)}")
 
 with client:
     client.loop.run_until_complete(startup_check())
