@@ -147,4 +147,86 @@ async def handler(event):
                 if previous_main_group and current_main_group != previous_main_group:
                     message_lines.append("➖➖➖➖➖➖➖➖")
 
-                message_lines.append(f"⚡️ **Група {
+                message_lines.append(f"⚡️ **Група {grp}:** {start_dt.strftime('%H:%M')} - {end_dt.strftime('%H:%M')}")
+                previous_main_group = current_main_group
+
+                # ЗАДАЧА В TASKS (ТІЛЬКИ МОЯ ГРУПА)
+                if grp == MY_PERSONAL_GROUP:
+                    notif_time = start_dt - timedelta(hours=2, minutes=10)
+                    task = {
+                        'title': f"💡 СВІТЛО (Гр. {grp})",
+                        'notes': f"{start_dt.strftime('%H:%M')} - {end_dt.strftime('%H:%M')}",
+                        'due': notif_time.isoformat() + 'Z'
+                    }
+                    try: service.tasks().insert(tasklist='@default', body=task).execute()
+                    except: pass
+            
+            if message_lines:
+                full_message = "\n".join(message_lines)
+                try: await client.send_message(CHANNEL_USERNAME, full_message, file=IMG_SCHEDULE)
+                except: pass
+            return
+
+    # === 4. ОБРОБКА ФОТО (AI) ===
+    if event.message.photo:
+        async with processing_lock:
+            status = await client.send_message(MAIN_ACCOUNT_USERNAME, "🛡 **AI:** Перевіряю фото...")
+            path = await event.message.download_media()
+            result = await asyncio.to_thread(ask_gemini_all_groups, path, event.message.message)
+            os.remove(path)
+            
+            if isinstance(result, list) and result:
+                service = await get_tasks_service()
+                schedule = result
+                schedule.sort(key=lambda x: x.get('group', ''))
+                
+                message_lines = []
+                previous_main_group = None
+
+                for entry in schedule:
+                    try:
+                        start_dt = parser.parse(entry['start'])
+                        end_dt = parser.parse(entry['end'])
+                        grp = entry.get('group', '?')
+                    except: continue
+
+                    current_main_group = grp.split('.')[0] if '.' in grp else grp
+                    
+                    if previous_main_group and current_main_group != previous_main_group:
+                        message_lines.append("➖➖➖➖➖➖➖➖")
+
+                    message_lines.append(f"⚡️ **Група {grp}:** {start_dt.strftime('%H:%M')} - {end_dt.strftime('%H:%M')}")
+                    previous_main_group = current_main_group
+
+                    if grp == MY_PERSONAL_GROUP:
+                        notif_time = start_dt - timedelta(hours=2, minutes=10)
+                        task = {
+                            'title': f"💡 СВІТЛО (Гр. {grp})",
+                            'notes': f"{start_dt.strftime('%H:%M')} - {end_dt.strftime('%H:%M')}",
+                            'due': notif_time.isoformat() + 'Z'
+                        }
+                        try: service.tasks().insert(tasklist='@default', body=task).execute()
+                        except: pass
+                
+                await client.delete_messages(None, status)
+
+                if message_lines:
+                    full_message = "\n".join(message_lines)
+                    try: await client.send_message(CHANNEL_USERNAME, full_message, file=IMG_SCHEDULE)
+                    except: pass
+            else:
+                await client.delete_messages(None, status)
+
+async def startup_check():
+    global REAL_SIREN_ID
+    try:
+        await client(JoinChannelRequest(SIREN_CHANNEL_USER))
+        entity = await client.get_entity(SIREN_CHANNEL_USER)
+        REAL_SIREN_ID = int(f"-100{entity.id}")
+        await client.send_message(MAIN_ACCOUNT_USERNAME, f"🟢 **STRUM:** Розділювачі додано.")
+    except:
+        await client.send_message(MAIN_ACCOUNT_USERNAME, "⚠️ Авто-пошук сирени не вдався.")
+
+with client:
+    client.loop.run_until_complete(startup_check())
+    client.run_until_disconnected()
