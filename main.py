@@ -142,8 +142,9 @@ async def handler(event):
                 # ЗАДАЧА В TASKS (ТОЛЬКО ДЛЯ 1.1)
                 if grp == MY_PERSONAL_GROUP:
                     notif_time = start_dt - timedelta(hours=2, minutes=10)
+                    task_title = f"{'🔄' if is_update else '💡'} СВІТЛО (Гр. {grp})"
                     task = {
-                        'title': f"{'🔄' if is_update else '💡'} СВІТЛО (Гр. {grp})",
+                        'title': task_title,
                         'notes': time_str,
                         'due': notif_time.isoformat() + 'Z'
                     }
@@ -158,37 +159,9 @@ async def handler(event):
     # === 4. ЕДИНЫЙ ПОСТ ДЛЯ ГРАФИКОВ (ФОТО) ===
     if event.message.photo:
         async with processing_lock:
-            # Отправляем "печатает..." в личку, чтобы вы видели, что процесс идет
             try: await client.send_read_acknowledge(event.chat_id)
             except: pass
             
             path = await event.message.download_media()
             result = await asyncio.to_thread(ask_gemini_all_groups, path, event.message.message)
             os.remove(path)
-            
-            if isinstance(result, list) and result:
-                service = await get_tasks_service()
-                schedule = result
-                schedule.sort(key=lambda x: x.get('group', ''))
-                
-                msg_lines = ["⚡️ **ГРАФІК ВІДКЛЮЧЕНЬ (AI):**", ""]
-
-                for entry in schedule:
-                    try:
-                        start_dt = parser.parse(entry['start'])
-                        end_dt = parser.parse(entry['end'])
-                        grp = entry.get('group', '?')
-                    except: continue
-
-                    time_str = f"{start_dt.strftime('%H:%M')} - {end_dt.strftime('%H:%M')}"
-                    msg_lines.append(f"🔹 **Гр. {grp}:** {time_str}")
-
-                    # Tasks только для 1.1
-                    if grp == MY_PERSONAL_GROUP:
-                        notif_time = start_dt - timedelta(hours=2, minutes=10)
-                        task = {
-                            'title': f"💡 СВІТЛО (Гр. {grp})",
-                            'notes': time_str,
-                            'due': notif_time.isoformat() + 'Z'
-                        }
-                        try: service.tasks().insert(tasklist='@default
