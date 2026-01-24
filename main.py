@@ -14,10 +14,10 @@ from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
 # === НАЛАШТУВАННЯ ===
-MY_PERSONAL_GROUP = "1.1"  
-MAIN_ACCOUNT_USERNAME = "@nemovisio" 
+MY_PERSONAL_GROUP = "1.1"
+MAIN_ACCOUNT_USERNAME = "@nemovisio"
 CHANNEL_USERNAME = "@strum_dp"
-SIREN_CHANNEL_USER = "sirena_dp" 
+SIREN_CHANNEL_USER = "sirena_dp"
 
 # === ЗМІННІ ===
 API_ID = int(os.environ['API_ID'])
@@ -79,7 +79,7 @@ def ask_gemini_all_groups(photo_path, text):
             response = requests.post(full_url, json=payload, headers={'Content-Type': 'application/json'}, timeout=60)
             if response.status_code == 200:
                 try: return json.loads(response.json()['candidates'][0]['content']['parts'][0]['text'].replace('```json', '').replace('```', '').strip())
-                except: return [] 
+                except: return []
             elif response.status_code == 429: time.sleep(30); continue
             else: time.sleep(5); continue
         except: time.sleep(5)
@@ -91,12 +91,12 @@ client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
 async def handler(event):
     text = (event.message.message or "").lower()
     chat_id = event.chat_id
-    
+
     # === 0. АВТО-ВИЗНАЧЕННЯ ID СИРЕНИ (ШПИГУН) ===
     if event.is_private and event.out and event.fwd_from:
          try:
              rid = getattr(event.fwd_from.from_id, 'channel_id', None)
-             if rid: 
+             if rid:
                  global REAL_SIREN_ID
                  REAL_SIREN_ID = int(f"-100{rid}")
          except: pass
@@ -135,6 +135,9 @@ async def handler(event):
             service = await get_tasks_service()
             schedule.sort(key=lambda x: x['group'])
             
+            # --- ЗМІНА: Збираємо повідомлення ---
+            message_lines = []
+            
             for entry in schedule:
                 # Парсимо час
                 try:
@@ -144,12 +147,10 @@ async def handler(event):
                 
                 grp = entry['group']
                 
-                # 1. ПОСТ В КАНАЛ (Для всіх)
-                msg = f"⚡️ **Група {grp}:** {start_dt.strftime('%H:%M')} - {end_dt.strftime('%H:%M')}"
-                try: await client.send_message(CHANNEL_USERNAME, msg, file=IMG_SCHEDULE)
-                except: pass
+                # 1. ДОДАЄМО РЯДОК У СПИСОК (замість відправки)
+                message_lines.append(f"⚡️ **Група {grp}:** {start_dt.strftime('%H:%M')} - {end_dt.strftime('%H:%M')}")
 
-                # 2. ЗАДАЧА В TASKS (ТІЛЬКИ МОЯ ГРУПА)
+                # 2. ЗАДАЧА В TASKS (ТІЛЬКИ МОЯ ГРУПА) - БЕЗ ЗМІН
                 if grp == MY_PERSONAL_GROUP:
                     notif_time = start_dt - timedelta(hours=2, minutes=10)
                     task = {
@@ -159,6 +160,12 @@ async def handler(event):
                     }
                     try: service.tasks().insert(tasklist='@default', body=task).execute()
                     except: pass
+            
+            # --- ВІДПРАВЛЯЄМО ОДНЕ ПОВІДОМЛЕННЯ ---
+            if message_lines:
+                full_message = "\n".join(message_lines)
+                try: await client.send_message(CHANNEL_USERNAME, full_message, file=IMG_SCHEDULE)
+                except: pass
             return
 
     # === 4. ОБРОБКА ФОТО (AI) ===
@@ -175,6 +182,9 @@ async def handler(event):
                 schedule = result
                 schedule.sort(key=lambda x: x.get('group', ''))
                 
+                # --- ЗМІНА: Збираємо повідомлення ---
+                message_lines = []
+
                 for entry in schedule:
                     try:
                         start_dt = parser.parse(entry['start'])
@@ -182,12 +192,10 @@ async def handler(event):
                         grp = entry.get('group', '?')
                     except: continue
 
-                    # Пост в канал
-                    msg = f"⚡️ **Група {grp}:** {start_dt.strftime('%H:%M')} - {end_dt.strftime('%H:%M')}"
-                    try: await client.send_message(CHANNEL_USERNAME, msg, file=IMG_SCHEDULE)
-                    except: pass
+                    # Додаємо рядок
+                    message_lines.append(f"⚡️ **Група {grp}:** {start_dt.strftime('%H:%M')} - {end_dt.strftime('%H:%M')}")
 
-                    # Tasks тільки для 1.1
+                    # Tasks тільки для 1.1 - БЕЗ ЗМІН
                     if grp == MY_PERSONAL_GROUP:
                         notif_time = start_dt - timedelta(hours=2, minutes=10)
                         task = {
@@ -198,7 +206,15 @@ async def handler(event):
                         try: service.tasks().insert(tasklist='@default', body=task).execute()
                         except: pass
                 
+                # Видаляємо статус
                 await client.delete_messages(None, status)
+
+                # --- ВІДПРАВЛЯЄМО ОДНЕ ПОВІДОМЛЕННЯ ---
+                if message_lines:
+                    full_message = "\n".join(message_lines)
+                    try: await client.send_message(CHANNEL_USERNAME, full_message, file=IMG_SCHEDULE)
+                    except: pass
+
             else:
                 await client.delete_messages(None, status)
 
@@ -208,7 +224,7 @@ async def startup_check():
         await client(JoinChannelRequest(SIREN_CHANNEL_USER))
         entity = await client.get_entity(SIREN_CHANNEL_USER)
         REAL_SIREN_ID = int(f"-100{entity.id}")
-        await client.send_message(MAIN_ACCOUNT_USERNAME, f"🟢 **STRUM STABLE:** Систему відновлено. Сирена + Група 1.1.")
+        await client.send_message(MAIN_ACCOUNT_USERNAME, f"🟢 **STRUM STABLE:** Систему відновлено (1 msg mode).")
     except:
         await client.send_message(MAIN_ACCOUNT_USERNAME, "⚠️ Авто-пошук сирени не вдався, але ручний режим працює.")
 
