@@ -91,37 +91,42 @@ async def handler(event):
     text = (event.message.message or "").lower()
     chat_id = event.chat_id
     
-    # === 0. РЕЖИМ ШПИГУНА (Дізнаємось ID каналів) ===
-    # Якщо ви переслали повідомлення у "Вибране" (Saved Messages)
+    # === 0. ШПИГУН (Для дебагу) ===
+    # Якщо переслали повідомлення у "Вибране" - показуємо його справжній ID
     if event.is_private and event.out and event.fwd_from:
-        channel_id = event.fwd_from.from_id
-        if channel_id:
-            # Витягуємо ID з об'єкта PeerChannel, якщо це можливо
-            real_id = getattr(channel_id, 'channel_id', None)
-            if real_id:
-                full_id = f"-100{real_id}"
-                await client.send_message("me", f"📡 **ШПИГУН:**\nЦе повідомлення з каналу ID: `{full_id}`\nЯ запам'ятав його як Сирену.")
-                global REAL_SIREN_ID
-                REAL_SIREN_ID = int(full_id)
-            else:
-                await client.send_message("me", f"📡 **ШПИГУН:** Це переслано від користувача, а не з каналу.")
+        if event.fwd_from.from_id:
+             try:
+                 rid = getattr(event.fwd_from.from_id, 'channel_id', None)
+                 if rid: await client.send_message("me", f"📡 ID каналу: `-100{rid}`")
+             except: pass
 
     # === 1. ТЕСТ СИРЕНИ (Виправлено) ===
-    # Працює завжди, якщо ви пишете це самі собі
     if "test_siren" in text and event.out:
         if "тривога" in text:
-            await client.send_message(CHANNEL_USERNAME, "🔴 **ТЕСТ: УВАГА! ПОВІТРЯНА ТРИВОГА!**", file=IMG_ALARM)
+            await client.send_message("me", "✅ Команда прийнята. Публікую ТРИВОГУ...")
+            await client.send_message(CHANNEL_USERNAME, "🔴 **УВАГА! ПОВІТРЯНА ТРИВОГА!**", file=IMG_ALARM)
         elif "відбій" in text:
-            await client.send_message(CHANNEL_USERNAME, "🟢 **ТЕСТ: ВІДБІЙ ПОВІТРЯНОЇ ТРИВОГИ!**", file=IMG_ALL_CLEAR)
+            await client.send_message("me", "✅ Команда прийнята. Публікую ВІДБІЙ...")
+            await client.send_message(CHANNEL_USERNAME, "🟢 **ВІДБІЙ ПОВІТРЯНОЇ ТРИВОГИ!**", file=IMG_ALL_CLEAR)
+        else:
+            await client.send_message("me", "ℹ️ **Як тестувати:**\nНапишіть: `test_siren тривога`\nАбо: `test_siren відбій`")
         return
 
-    # === 2. РЕАЛЬНА СИРЕНА ===
-    # Перевіряємо: це канал Сирени (по ID) АБО по імені АБО ми переслали повідомлення звідти
-    is_siren_source = (chat_id == REAL_SIREN_ID)
+    # === 2. РЕАЛЬНА СИРЕНА (Виправлено ID) ===
+    # Тепер ми порівнюємо правильно (з -100 і без)
+    is_siren_source = False
+    if REAL_SIREN_ID:
+        # Перевірка: ID співпадає?
+        if chat_id == REAL_SIREN_ID: is_siren_source = True
     
-    # Якщо це переслане повідомлення і ми ще не знаємо ID, спробуємо вгадати по тексту
-    if event.fwd_from and ("сирена" in text or "тривога" in text or "відбій" in text):
-         # Якщо в тексті є ключові слова, вважаємо це сиреною (для тестів пересиланням)
+    # Резервна перевірка по імені (якщо ID змінився)
+    if not is_siren_source:
+        if event.chat and hasattr(event.chat, 'username') and event.chat.username:
+            if event.chat.username.lower() == SIREN_CHANNEL_USER: is_siren_source = True
+
+    # Резервна перевірка для пересланих повідомлень (Шпигун)
+    if event.fwd_from and ("тривога" in text or "відбій" in text or "сирена" in text):
+         # Якщо це переслано з каналу, який ми ще не знаємо, але там про тривогу
          is_siren_source = True
 
     if is_siren_source:
@@ -135,11 +140,12 @@ async def handler(event):
 
     # Фільтри для ДТЕК
     allowed_channels = ['dtek_ua', 'avariykaaa', 'avariykaaa_dnepr_radar', 'me']
-    chat_username = ""
+    chat_uname = ""
     if event.chat and hasattr(event.chat, 'username') and event.chat.username:
-        chat_username = event.chat.username.lower()
+        chat_uname = event.chat.username.lower()
     
-    if chat_username not in allowed_channels and not is_siren_source:
+    # Якщо це не сирена і не наші канали - ігноруємо
+    if not is_siren_source and chat_uname not in allowed_channels:
         return 
 
     # === 3. ЕКСТРЕНІ ===
@@ -150,11 +156,10 @@ async def handler(event):
         except: pass
         return
 
-    if chat_username == 'dtek_ua' and REGION_TAG not in text: return
-    if chat_username == 'avariykaaa' and 'цек' in text: return 
+    if chat_uname == 'dtek_ua' and REGION_TAG not in text: return
+    if chat_uname == 'avariykaaa' and 'цек' in text: return 
 
-    # === 4. ТЕКСТ І ФОТО (ГРАФІКИ) ===
-    # (Тут без змін, код графіків працює)
+    # === 4. ТЕКСТ І ФОТО ===
     if (re.search(r'\d\.\d', text)) and (re.search(r'\d{1,2}:\d{2}', text)):
         schedule = parse_text_all_groups(event.message.message)
         if schedule:
@@ -207,10 +212,11 @@ async def startup_check():
     try:
         await client(JoinChannelRequest(SIREN_CHANNEL_USER))
         entity = await client.get_entity(SIREN_CHANNEL_USER)
-        REAL_SIREN_ID = entity.id
-        await client.send_message(MAIN_ACCOUNT_USERNAME, f"🟢 **STRUM:** Канал сирени ID: `{REAL_SIREN_ID}`")
+        # ОСЬ ВОНО: Виправляємо ID, додаючи -100
+        REAL_SIREN_ID = int(f"-100{entity.id}")
+        await client.send_message(MAIN_ACCOUNT_USERNAME, f"🟢 **STRUM FIXED:** ID сирени виправлено: `{REAL_SIREN_ID}`")
     except:
-        await client.send_message(MAIN_ACCOUNT_USERNAME, "⚠️ Не зміг знайти сирену автоматично. Перешліть повідомлення з неї, щоб я навчився.")
+        await client.send_message(MAIN_ACCOUNT_USERNAME, "⚠️ Не зміг знайти сирену автоматично.")
 
 with client:
     client.loop.run_until_complete(startup_check())
