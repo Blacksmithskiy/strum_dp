@@ -13,13 +13,13 @@ from telethon.tl.functions.channels import JoinChannelRequest
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
-# === НАСТРОЙКИ ===
+# === НАЛАШТУВАННЯ ===
 MY_PERSONAL_GROUP = "1.1"  
 MAIN_ACCOUNT_USERNAME = "@nemovisio" 
 CHANNEL_USERNAME = "@strum_dp"
 SIREN_CHANNEL_USER = "sirena_dp" 
 
-# === ПЕРЕМЕННЫЕ ===
+# === ЗМІННІ ===
 API_ID = int(os.environ['API_ID'])
 API_HASH = os.environ['API_HASH']
 SESSION_STRING = os.environ['TELEGRAM_SESSION']
@@ -27,7 +27,6 @@ GEMINI_KEY = os.environ['GEMINI_API_KEY']
 GOOGLE_TOKEN = os.environ['GOOGLE_TOKEN_JSON']
 
 IMG_SCHEDULE = "https://arcanavisio.com/wp-content/uploads/2026/01/MAIN.jpg"
-IMG_UPDATE = "https://arcanavisio.com/wp-content/uploads/2026/01/UPDATE.jpg"
 IMG_EMERGENCY = "https://arcanavisio.com/wp-content/uploads/2026/01/EXTRA.jpg"
 IMG_ALARM = "https://arcanavisio.com/wp-content/uploads/2026/01/ALARM.jpg"
 IMG_ALL_CLEAR = "https://arcanavisio.com/wp-content/uploads/2026/01/REBOUND.jpg"
@@ -45,12 +44,14 @@ def parse_text_all_groups(text):
     lines = text.split('\n')
     for line in lines:
         line_lower = line.lower().strip()
-        groups = re.findall(r'\b(\d\.\d)\b', line_lower)
-        if groups:
+        # Шукаємо 1.1, 2.1...
+        found_groups = re.findall(r'\b(\d\.\d)\b', line_lower)
+        if found_groups:
+            # Шукаємо час
             times = re.findall(r'(\d{1,2}:\d{2}).*?(\d{1,2}:\d{2})', line_lower)
             if times:
                 today = datetime.now().strftime('%Y-%m-%d')
-                for gr in groups:
+                for gr in found_groups:
                     if gr in [t[0] for t in times] or gr in [t[1] for t in times]: continue
                     for t in times:
                         schedule.append({
@@ -67,7 +68,8 @@ def ask_gemini_all_groups(photo_path, text):
             image_data = base64.b64encode(image_file.read()).decode("utf-8")
     except: return "FILE_ERROR"
     prompt = f"""
-    Analyze schedule. Find ALL groups. Return JSON list: [{{ "group": "1.1", "start": "HH:MM", "end": "HH:MM" }}]
+    Analyze this schedule image. Find ALL groups (1.1, 1.2, etc).
+    Return JSON list: [{{ "group": "1.1", "start": "HH:MM", "end": "HH:MM" }}]
     Date today: {datetime.now().strftime('%Y-%m-%d')}.
     """
     payload = {"contents": [{"parts": [{"text": prompt}, {"inline_data": {"mime_type": "image/jpeg", "data": image_data}}]}]}
@@ -90,12 +92,25 @@ async def handler(event):
     text = (event.message.message or "").lower()
     chat_id = event.chat_id
     
-    # === 1. СИРЕНА ===
+    # === 0. АВТО-ВИЗНАЧЕННЯ ID СИРЕНИ (ШПИГУН) ===
+    if event.is_private and event.out and event.fwd_from:
+         try:
+             rid = getattr(event.fwd_from.from_id, 'channel_id', None)
+             if rid: 
+                 global REAL_SIREN_ID
+                 REAL_SIREN_ID = int(f"-100{rid}")
+         except: pass
+
+    # === 1. ЛОГІКА СИРЕНИ (ПРІОРИТЕТ) ===
     is_siren = False
+    # Перевірка по ID
     if REAL_SIREN_ID and chat_id == REAL_SIREN_ID: is_siren = True
+    # Перевірка по юзернейму
     if event.chat and hasattr(event.chat, 'username') and event.chat.username:
         if event.chat.username.lower() == SIREN_CHANNEL_USER: is_siren = True
+    # Перевірка ручного тесту
     if "test_siren" in text and event.out: is_siren = True
+    # Перевірка пересилання
     if event.fwd_from and ("сирена" in text or "тривог" in text): is_siren = True
 
     if is_siren:
@@ -105,63 +120,98 @@ async def handler(event):
             await client.send_message(CHANNEL_USERNAME, "🔴 **УВАГА! ПОВІТРЯНА ТРИВОГА!**", file=IMG_ALARM)
         return
 
-    # === 2. ЭКСТРЕННЫЕ ===
+    # === 2. ЕКСТРЕНІ ===
     if any(w in text for w in ['екстрені', 'экстренные', 'скасовані', 'отмена']):
         if any(k in text for k in ['дніпро', 'днепр', 'дтек', 'дтэк']):
             msg = "🚨 **ТРИВОГА: ЕКСТРЕНІ ВІДКЛЮЧЕННЯ!**"
             await client.send_message(CHANNEL_USERNAME, msg, file=IMG_EMERGENCY)
             return
 
-    # === 3. ЕДИНЫЙ ПОСТ ДЛЯ ГРАФИКОВ (ТЕКСТ) ===
+    # === 3. ОБРОБКА ТЕКСТУ (ГРАФІКИ) ===
+    # Шукаємо наявність груп і часу в тексті
     if re.search(r'\d\.\d', text) and re.search(r'\d{1,2}:\d{2}', text):
         schedule = parse_text_all_groups(event.message.message)
         if schedule:
             service = await get_tasks_service()
             schedule.sort(key=lambda x: x['group'])
             
-            # Заголовок
-            is_update = any(w in text for w in ['зміни', 'оновлення', 'изменения', 'обновление'])
-            header = "🔄 **ОНОВЛЕННЯ ГРАФІКУ:**" if is_update else "⚡️ **ГРАФІК ВІДКЛЮЧЕНЬ:**"
-            img_to_use = IMG_UPDATE if is_update else IMG_SCHEDULE
-            
-            # Формируем тело сообщения
-            msg_lines = [header, ""]
-            
             for entry in schedule:
+                # Парсимо час
                 try:
                     start_dt = parser.parse(entry['start'])
                     end_dt = parser.parse(entry['end'])
                 except: continue
                 
                 grp = entry['group']
-                time_str = f"{start_dt.strftime('%H:%M')} - {end_dt.strftime('%H:%M')}"
                 
-                # Добавляем строку в общее сообщение
-                msg_lines.append(f"🔹 **Гр. {grp}:** {time_str}")
+                # 1. ПОСТ В КАНАЛ (Для всіх)
+                msg = f"⚡️ **Група {grp}:** {start_dt.strftime('%H:%M')} - {end_dt.strftime('%H:%M')}"
+                try: await client.send_message(CHANNEL_USERNAME, msg, file=IMG_SCHEDULE)
+                except: pass
 
-                # ЗАДАЧА В TASKS (ТОЛЬКО ДЛЯ 1.1)
+                # 2. ЗАДАЧА В TASKS (ТІЛЬКИ МОЯ ГРУПА)
                 if grp == MY_PERSONAL_GROUP:
                     notif_time = start_dt - timedelta(hours=2, minutes=10)
-                    task_title = f"{'🔄' if is_update else '💡'} СВІТЛО (Гр. {grp})"
                     task = {
-                        'title': task_title,
-                        'notes': time_str,
+                        'title': f"💡 СВІТЛО (Гр. {grp})",
+                        'notes': f"{start_dt.strftime('%H:%M')} - {end_dt.strftime('%H:%M')}",
                         'due': notif_time.isoformat() + 'Z'
                     }
                     try: service.tasks().insert(tasklist='@default', body=task).execute()
                     except: pass
-            
-            # Отправляем ОДИН раз
-            full_message = "\n".join(msg_lines)
-            await client.send_message(CHANNEL_USERNAME, full_message, file=img_to_use)
             return
 
-    # === 4. ЕДИНЫЙ ПОСТ ДЛЯ ГРАФИКОВ (ФОТО) ===
+    # === 4. ОБРОБКА ФОТО (AI) ===
     if event.message.photo:
         async with processing_lock:
-            try: await client.send_read_acknowledge(event.chat_id)
-            except: pass
-            
+            # Тільки якщо це схоже на графік (є слова дтек, дніпро і т.д.) або просто з надійного каналу
+            status = await client.send_message(MAIN_ACCOUNT_USERNAME, "🛡 **AI:** Перевіряю фото...")
             path = await event.message.download_media()
             result = await asyncio.to_thread(ask_gemini_all_groups, path, event.message.message)
             os.remove(path)
+            
+            if isinstance(result, list) and result:
+                service = await get_tasks_service()
+                schedule = result
+                schedule.sort(key=lambda x: x.get('group', ''))
+                
+                for entry in schedule:
+                    try:
+                        start_dt = parser.parse(entry['start'])
+                        end_dt = parser.parse(entry['end'])
+                        grp = entry.get('group', '?')
+                    except: continue
+
+                    # Пост в канал
+                    msg = f"⚡️ **Група {grp}:** {start_dt.strftime('%H:%M')} - {end_dt.strftime('%H:%M')}"
+                    try: await client.send_message(CHANNEL_USERNAME, msg, file=IMG_SCHEDULE)
+                    except: pass
+
+                    # Tasks тільки для 1.1
+                    if grp == MY_PERSONAL_GROUP:
+                        notif_time = start_dt - timedelta(hours=2, minutes=10)
+                        task = {
+                            'title': f"💡 СВІТЛО (Гр. {grp})",
+                            'notes': f"{start_dt.strftime('%H:%M')} - {end_dt.strftime('%H:%M')}",
+                            'due': notif_time.isoformat() + 'Z'
+                        }
+                        try: service.tasks().insert(tasklist='@default', body=task).execute()
+                        except: pass
+                
+                await client.delete_messages(None, status)
+            else:
+                await client.delete_messages(None, status)
+
+async def startup_check():
+    global REAL_SIREN_ID
+    try:
+        await client(JoinChannelRequest(SIREN_CHANNEL_USER))
+        entity = await client.get_entity(SIREN_CHANNEL_USER)
+        REAL_SIREN_ID = int(f"-100{entity.id}")
+        await client.send_message(MAIN_ACCOUNT_USERNAME, f"🟢 **STRUM STABLE:** Систему відновлено. Сирена + Група 1.1.")
+    except:
+        await client.send_message(MAIN_ACCOUNT_USERNAME, "⚠️ Авто-пошук сирени не вдався, але ручний режим працює.")
+
+with client:
+    client.loop.run_until_complete(startup_check())
+    client.run_until_disconnected()
