@@ -13,13 +13,13 @@ from telethon.tl.functions.channels import JoinChannelRequest
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
-# === НАЛАШТУВАННЯ ===
+# === НАСТРОЙКИ ===
 MY_PERSONAL_GROUP = "1.1"  
 MAIN_ACCOUNT_USERNAME = "@nemovisio" 
 CHANNEL_USERNAME = "@strum_dp"
 SIREN_CHANNEL_USER = "sirena_dp" 
 
-# === ЗМІННІ ===
+# === ПЕРЕМЕННЫЕ ===
 API_ID = int(os.environ['API_ID'])
 API_HASH = os.environ['API_HASH']
 SESSION_STRING = os.environ['TELEGRAM_SESSION']
@@ -90,16 +90,7 @@ async def handler(event):
     text = (event.message.message or "").lower()
     chat_id = event.chat_id
     
-    # === 0. АВТО-ВИЗНАЧЕННЯ ID СИРЕНИ ===
-    if event.is_private and event.out and event.fwd_from:
-         try:
-             rid = getattr(event.fwd_from.from_id, 'channel_id', None)
-             if rid: 
-                 global REAL_SIREN_ID
-                 REAL_SIREN_ID = int(f"-100{rid}")
-         except: pass
-
-    # === 1. ЛОГІКА СИРЕНИ ===
+    # === 1. СИРЕНА ===
     is_siren = False
     if REAL_SIREN_ID and chat_id == REAL_SIREN_ID: is_siren = True
     if event.chat and hasattr(event.chat, 'username') and event.chat.username:
@@ -114,26 +105,26 @@ async def handler(event):
             await client.send_message(CHANNEL_USERNAME, "🔴 **УВАГА! ПОВІТРЯНА ТРИВОГА!**", file=IMG_ALARM)
         return
 
-    # === 2. ЕКСТРЕНІ ===
+    # === 2. ЭКСТРЕННЫЕ ===
     if any(w in text for w in ['екстрені', 'экстренные', 'скасовані', 'отмена']):
         if any(k in text for k in ['дніпро', 'днепр', 'дтек', 'дтэк']):
             msg = "🚨 **ТРИВОГА: ЕКСТРЕНІ ВІДКЛЮЧЕННЯ!**"
             await client.send_message(CHANNEL_USERNAME, msg, file=IMG_EMERGENCY)
             return
 
-    # === 3. ОБРОБКА ТЕКСТУ (ЗБІРНЕ ПОВІДОМЛЕННЯ) ===
+    # === 3. ЕДИНЫЙ ПОСТ ДЛЯ ГРАФИКОВ (ТЕКСТ) ===
     if re.search(r'\d\.\d', text) and re.search(r'\d{1,2}:\d{2}', text):
         schedule = parse_text_all_groups(event.message.message)
         if schedule:
             service = await get_tasks_service()
             schedule.sort(key=lambda x: x['group'])
             
-            # Підготовка заголовка
+            # Заголовок
             is_update = any(w in text for w in ['зміни', 'оновлення', 'изменения', 'обновление'])
             header = "🔄 **ОНОВЛЕННЯ ГРАФІКУ:**" if is_update else "⚡️ **ГРАФІК ВІДКЛЮЧЕНЬ:**"
             img_to_use = IMG_UPDATE if is_update else IMG_SCHEDULE
             
-            # Збираємо текст повідомлення
+            # Формируем тело сообщения
             msg_lines = [header, ""]
             
             for entry in schedule:
@@ -145,10 +136,10 @@ async def handler(event):
                 grp = entry['group']
                 time_str = f"{start_dt.strftime('%H:%M')} - {end_dt.strftime('%H:%M')}"
                 
-                # Додаємо рядок у повідомлення
+                # Добавляем строку в общее сообщение
                 msg_lines.append(f"🔹 **Гр. {grp}:** {time_str}")
 
-                # ЗАДАЧА В TASKS (ТІЛЬКИ МОЯ ГРУПА)
+                # ЗАДАЧА В TASKS (ТОЛЬКО ДЛЯ 1.1)
                 if grp == MY_PERSONAL_GROUP:
                     notif_time = start_dt - timedelta(hours=2, minutes=10)
                     task = {
@@ -159,6 +150,45 @@ async def handler(event):
                     try: service.tasks().insert(tasklist='@default', body=task).execute()
                     except: pass
             
-            # Відправляємо ОДНЕ повідомлення
+            # Отправляем ОДИН раз
             full_message = "\n".join(msg_lines)
             await client.send_message(CHANNEL_USERNAME, full_message, file=img_to_use)
+            return
+
+    # === 4. ЕДИНЫЙ ПОСТ ДЛЯ ГРАФИКОВ (ФОТО) ===
+    if event.message.photo:
+        async with processing_lock:
+            # Отправляем "печатает..." в личку, чтобы вы видели, что процесс идет
+            try: await client.send_read_acknowledge(event.chat_id)
+            except: pass
+            
+            path = await event.message.download_media()
+            result = await asyncio.to_thread(ask_gemini_all_groups, path, event.message.message)
+            os.remove(path)
+            
+            if isinstance(result, list) and result:
+                service = await get_tasks_service()
+                schedule = result
+                schedule.sort(key=lambda x: x.get('group', ''))
+                
+                msg_lines = ["⚡️ **ГРАФІК ВІДКЛЮЧЕНЬ (AI):**", ""]
+
+                for entry in schedule:
+                    try:
+                        start_dt = parser.parse(entry['start'])
+                        end_dt = parser.parse(entry['end'])
+                        grp = entry.get('group', '?')
+                    except: continue
+
+                    time_str = f"{start_dt.strftime('%H:%M')} - {end_dt.strftime('%H:%M')}"
+                    msg_lines.append(f"🔹 **Гр. {grp}:** {time_str}")
+
+                    # Tasks только для 1.1
+                    if grp == MY_PERSONAL_GROUP:
+                        notif_time = start_dt - timedelta(hours=2, minutes=10)
+                        task = {
+                            'title': f"💡 СВІТЛО (Гр. {grp})",
+                            'notes': time_str,
+                            'due': notif_time.isoformat() + 'Z'
+                        }
+                        try: service.tasks().insert(tasklist='@default
