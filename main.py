@@ -27,12 +27,14 @@ GEMINI_KEY = os.environ['GEMINI_API_KEY']
 GOOGLE_TOKEN = os.environ['GOOGLE_TOKEN_JSON']
 
 IMG_SCHEDULE = "https://arcanavisio.com/wp-content/uploads/2026/01/MAIN.jpg"
+IMG_UPDATE = "https://arcanavisio.com/wp-content/uploads/2026/01/UPDATE.jpg" # (Можна ту ж саму, або нову)
 IMG_EMERGENCY = "https://arcanavisio.com/wp-content/uploads/2026/01/EXTRA.jpg"
 IMG_ALARM = "https://arcanavisio.com/wp-content/uploads/2026/01/ALARM.jpg"
 IMG_ALL_CLEAR = "https://arcanavisio.com/wp-content/uploads/2026/01/REBOUND.jpg"
 
 REGION_TAG = "дніпропетровщина"
 EMERGENCY_WORDS = ['екстрені', 'екстрене', 'скасовані графіки']
+UPDATE_WORDS = ['зміни', 'оновлення', 'змінено', 'оновлено', 'корегування', 'изменения', 'обновление']
 
 processing_lock = asyncio.Lock()
 REAL_SIREN_ID = None
@@ -45,18 +47,32 @@ async def get_tasks_service():
 def parse_text_all_groups(text):
     schedule = []
     lines = text.split('\n')
-    current_groups = []
+    
     for line in lines:
         line_lower = line.lower().strip()
-        found_groups = re.findall(r'[гч][рu].*?(\d\.\d)', line_lower)
-        if found_groups: current_groups = found_groups; continue
-        if current_groups:
+        
+        # 1. Шукаємо групи (1.1, 2.1...).
+        # ОНОВЛЕНО: Тепер шукаємо просто цифри "d.d", без обов'язкового слова "група"
+        # \b - означає границю слова, щоб не знайти це всередині дати
+        found_groups = re.findall(r'\b(\d\.\d)\b', line_lower)
+        
+        # 2. Якщо в рядку є групи, шукаємо час
+        if found_groups:
+            # Шукаємо пари часу: 12:00 - 14:00 (підтримуємо -, –, > і т.д.)
             times = re.findall(r'(\d{1,2}:\d{2}).*?(\d{1,2}:\d{2})', line_lower)
-            for t in times:
-                start_str, end_str = t
+            if times:
                 today = datetime.now().strftime('%Y-%m-%d')
-                for gr in current_groups:
-                    schedule.append({"group": gr, "start": f"{today}T{start_str}:00", "end": f"{today}T{end_str}:00"})
+                for gr in found_groups:
+                    # Ігноруємо якщо "знайдена група" це насправді година (рідкісний випадок)
+                    if gr in [t[0] for t in times] or gr in [t[1] for t in times]: continue
+                    
+                    for t in times:
+                        start_str, end_str = t
+                        schedule.append({
+                            "group": gr,
+                            "start": f"{today}T{start_str}:00",
+                            "end": f"{today}T{end_str}:00"
+                        })
     return schedule
 
 def ask_gemini_all_groups(photo_path, text):
@@ -91,62 +107,49 @@ async def handler(event):
     text = (event.message.message or "").lower()
     chat_id = event.chat_id
     
-    # === 0. ШПИГУН (Для дебагу) ===
-    # Якщо переслали повідомлення у "Вибране" - показуємо його справжній ID
+    # === 0. ШПИГУН ===
     if event.is_private and event.out and event.fwd_from:
         if event.fwd_from.from_id:
              try:
                  rid = getattr(event.fwd_from.from_id, 'channel_id', None)
-                 if rid: await client.send_message("me", f"📡 ID каналу: `-100{rid}`")
+                 if rid: 
+                     global REAL_SIREN_ID
+                     REAL_SIREN_ID = int(f"-100{rid}")
              except: pass
 
-    # === 1. ТЕСТ СИРЕНИ (Виправлено) ===
+    # === 1. ТЕСТ СИРЕНИ ===
     if "test_siren" in text and event.out:
-        if "тривога" in text:
-            await client.send_message("me", "✅ Команда прийнята. Публікую ТРИВОГУ...")
+        if "тривог" in text:
+            await client.send_message("me", "✅ Тест ТРИВОГИ...")
             await client.send_message(CHANNEL_USERNAME, "🔴 **УВАГА! ПОВІТРЯНА ТРИВОГА!**", file=IMG_ALARM)
         elif "відбій" in text:
-            await client.send_message("me", "✅ Команда прийнята. Публікую ВІДБІЙ...")
+            await client.send_message("me", "✅ Тест ВІДБОЮ...")
             await client.send_message(CHANNEL_USERNAME, "🟢 **ВІДБІЙ ПОВІТРЯНОЇ ТРИВОГИ!**", file=IMG_ALL_CLEAR)
-        else:
-            await client.send_message("me", "ℹ️ **Як тестувати:**\nНапишіть: `test_siren тривога`\nАбо: `test_siren відбій`")
         return
 
-    # === 2. РЕАЛЬНА СИРЕНА (Виправлено ID) ===
-    # Тепер ми порівнюємо правильно (з -100 і без)
+    # === 2. РЕАЛЬНА СИРЕНА ===
     is_siren_source = False
-    if REAL_SIREN_ID:
-        # Перевірка: ID співпадає?
-        if chat_id == REAL_SIREN_ID: is_siren_source = True
-    
-    # Резервна перевірка по імені (якщо ID змінився)
-    if not is_siren_source:
-        if event.chat and hasattr(event.chat, 'username') and event.chat.username:
-            if event.chat.username.lower() == SIREN_CHANNEL_USER: is_siren_source = True
-
-    # Резервна перевірка для пересланих повідомлень (Шпигун)
-    if event.fwd_from and ("тривога" in text or "відбій" in text or "сирена" in text):
-         # Якщо це переслано з каналу, який ми ще не знаємо, але там про тривогу
-         is_siren_source = True
+    if REAL_SIREN_ID and chat_id == REAL_SIREN_ID: is_siren_source = True
+    if not is_siren_source and event.chat and hasattr(event.chat, 'username') and event.chat.username:
+        if event.chat.username.lower() == SIREN_CHANNEL_USER: is_siren_source = True
+    if event.fwd_from and ("сирена" in text or "тривог" in text or "відбій" in text): is_siren_source = True
 
     if is_siren_source:
-        if "тривога" in text or "повітряна тривога" in text:
-            msg = "🔴 **УВАГА! ПОВІТРЯНА ТРИВОГА!**\n\nВсім пройти в укриття!"
-            await client.send_message(CHANNEL_USERNAME, msg, file=IMG_ALARM)
-        elif "відбій" in text:
-            msg = "🟢 **ВІДБІЙ ПОВІТРЯНОЇ ТРИВОГИ!**"
-            await client.send_message(CHANNEL_USERNAME, msg, file=IMG_ALL_CLEAR)
+        if "відбій" in text:
+            await client.send_message(CHANNEL_USERNAME, "🟢 **ВІДБІЙ ПОВІТРЯНОЇ ТРИВОГИ!**", file=IMG_ALL_CLEAR)
+        elif "тривог" in text or "оголошено" in text:
+            await client.send_message(CHANNEL_USERNAME, "🔴 **УВАГА! ПОВІТРЯНА ТРИВОГА!**\n\nВсім пройти в укриття!", file=IMG_ALARM)
         return
 
-    # Фільтри для ДТЕК
+    # Фільтри
     allowed_channels = ['dtek_ua', 'avariykaaa', 'avariykaaa_dnepr_radar', 'me']
     chat_uname = ""
     if event.chat and hasattr(event.chat, 'username') and event.chat.username:
         chat_uname = event.chat.username.lower()
     
-    # Якщо це не сирена і не наші канали - ігноруємо
-    if not is_siren_source and chat_uname not in allowed_channels:
-        return 
+    if not is_siren_source and chat_uname not in allowed_channels: return 
+    if chat_uname == 'dtek_ua' and REGION_TAG not in text: return
+    if chat_uname == 'avariykaaa' and 'цек' in text: return 
 
     # === 3. ЕКСТРЕНІ ===
     if any(w in text for w in EMERGENCY_WORDS):
@@ -156,30 +159,42 @@ async def handler(event):
         except: pass
         return
 
-    if chat_uname == 'dtek_ua' and REGION_TAG not in text: return
-    if chat_uname == 'avariykaaa' and 'цек' in text: return 
-
-    # === 4. ТЕКСТ І ФОТО ===
+    # === 4. ТЕКСТ (З ПЕРЕВІРКОЮ НА ЗМІНИ) ===
+    # Оновлений парсер: шукає 1.1 навіть без слова "група"
     if (re.search(r'\d\.\d', text)) and (re.search(r'\d{1,2}:\d{2}', text)):
         schedule = parse_text_all_groups(event.message.message)
+        
+        # Перевіряємо, чи це ЗМІНИ графіку
+        is_update = any(w in text for w in UPDATE_WORDS)
+        header_icon = "🔄" if is_update else "⚡️"
+        header_text = "**ОНОВЛЕННЯ ГРАФІКУ:**" if is_update else "**Графік відключень:**"
+        img_to_use = IMG_SCHEDULE # Можна поміняти на IMG_UPDATE якщо є
+        
         if schedule:
-            await client.send_message(MAIN_ACCOUNT_USERNAME, f"⚡️ **Текст:** Знайдено {len(schedule)} груп.")
+            await client.send_message(MAIN_ACCOUNT_USERNAME, f"{header_icon} **Текст:** Знайдено {len(schedule)} груп (Зміни: {is_update})")
             service = await get_tasks_service()
             schedule.sort(key=lambda x: x['group'])
+            
             for entry in schedule:
                 start_dt = parser.parse(entry['start'])
                 end_dt = parser.parse(entry['end'])
                 grp = entry['group']
+                
+                # Google Tasks (Тільки моя група)
                 if grp == MY_PERSONAL_GROUP:
                     notif_time = start_dt - timedelta(hours=2) - timedelta(minutes=10)
-                    task = {'title': f"💡 СВЕТА НЕ БУДЕТ (Гр. {grp})", 'notes': f"{start_dt.strftime('%H:%M')} - {end_dt.strftime('%H:%M')}", 'due': notif_time.isoformat() + 'Z'}
+                    task_title = f"🔄 ЗМІНА: Світла не буде" if is_update else f"💡 СВЕТА НЕ БУДЕТ"
+                    task = {'title': f"{task_title} (Гр. {grp})", 'notes': f"{start_dt.strftime('%H:%M')} - {end_dt.strftime('%H:%M')}", 'due': notif_time.isoformat() + 'Z'}
                     try: service.tasks().insert(tasklist='@default', body=task).execute()
                     except: pass
-                msg = f"⚡️ **Група {grp}:** Світла не буде з {start_dt.strftime('%H:%M')} до {end_dt.strftime('%H:%M')}"
-                try: await client.send_message(CHANNEL_USERNAME, msg, file=IMG_SCHEDULE)
+                
+                # Telegram Post
+                msg = f"{header_icon} {header_text}\n**Група {grp}:** {start_dt.strftime('%H:%M')} - {end_dt.strftime('%H:%M')}"
+                try: await client.send_message(CHANNEL_USERNAME, msg, file=img_to_use)
                 except: pass
             return
 
+    # === 5. ФОТО ===
     if event.message.photo:
         if processing_lock.locked(): await client.send_message(MAIN_ACCOUNT_USERNAME, "⏳ **Черга:** Чекаю...")
         async with processing_lock:
@@ -212,11 +227,10 @@ async def startup_check():
     try:
         await client(JoinChannelRequest(SIREN_CHANNEL_USER))
         entity = await client.get_entity(SIREN_CHANNEL_USER)
-        # ОСЬ ВОНО: Виправляємо ID, додаючи -100
         REAL_SIREN_ID = int(f"-100{entity.id}")
-        await client.send_message(MAIN_ACCOUNT_USERNAME, f"🟢 **STRUM FIXED:** ID сирени виправлено: `{REAL_SIREN_ID}`")
+        await client.send_message(MAIN_ACCOUNT_USERNAME, f"🟢 **STRUM UPDATE:** Підтримка скорочених графіків (1.1 > час) увімкнена.")
     except:
-        await client.send_message(MAIN_ACCOUNT_USERNAME, "⚠️ Не зміг знайти сирену автоматично.")
+        await client.send_message(MAIN_ACCOUNT_USERNAME, "⚠️ Сирена: авто-пошук не вдався.")
 
 with client:
     client.loop.run_until_complete(startup_check())
