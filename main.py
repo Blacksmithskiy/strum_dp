@@ -59,13 +59,17 @@ def parse_text_all_groups(text):
     lines = text.split('\n')
     for line in lines:
         line_lower = line.lower().strip()
+        # Шукаємо цифри 1.1, 2.1... як окремі слова
         found_groups = re.findall(r'\b(\d\.\d)\b', line_lower)
         if found_groups:
+            # Шукаємо час у форматі HH:MM
             times = re.findall(r'(\d{1,2}:\d{2}).*?(\d{1,2}:\d{2})', line_lower)
             if times:
                 today = datetime.now().strftime('%Y-%m-%d')
                 for gr in found_groups:
+                    # Фільтр: щоб не сплутати групу з частиною часу
                     if gr in [t[0] for t in times] or gr in [t[1] for t in times]: continue
+                    
                     for t in times:
                         start_str, end_str = t
                         schedule.append({
@@ -148,11 +152,14 @@ async def handler(event):
         chat_uname = event.chat.username.lower()
     
     if not is_siren_source and chat_uname not in allowed_channels: return 
-    if chat_uname == 'dtek_ua' and not any(k in text for k in REGION_KEYWORDS): return
+    
+    # Фільтр регіону (оновлений)
+    if chat_uname == 'dtek_ua':
+        if not any(k in text for k in REGION_KEYWORDS): return
 
     # === 3. ЕКСТРЕНІ ===
     if any(w in text for w in EMERGENCY_WORDS):
-        msg = "🚨 **ТРИВОГА: ЕКСТРЕНІ ВІДКЛЮЧЕННЯ!**"
+        msg = "🚨 **ТРИВОГА: ЕКСТРЕНІ ВІДКЛЮЧЕННЯ!**\n(Экстренные отключения)"
         await client.send_message(MAIN_ACCOUNT_USERNAME, msg, file=IMG_EMERGENCY)
         try: await client.send_message(CHANNEL_USERNAME, msg, file=IMG_EMERGENCY)
         except: pass
@@ -177,11 +184,11 @@ async def handler(event):
                 end_dt = parser.parse(entry['end'])
                 grp = entry['group']
                 
-                # Google Tasks (Безпечний запис)
+                # Google Tasks (ВИПРАВЛЕНО ПОМИЛКУ СИНТАКСИСУ)
                 if grp == MY_PERSONAL_GROUP:
                     notif_time = start_dt - timedelta(hours=2) - timedelta(minutes=10)
                     
-                    # Формуємо змінні окремо, щоб не було помилок синтаксису
+                    # Виносимо змінні окремо - це безпечніше
                     base_title = "🔄 ИЗМЕНЕНИЕ" if is_update else "💡 СВЕТА НЕ БУДЕТ"
                     full_title = f"{base_title} (Гр. {grp})"
                     time_range = f"{start_dt.strftime('%H:%M')} - {end_dt.strftime('%H:%M')}"
@@ -235,7 +242,7 @@ async def startup_check():
         await client(JoinChannelRequest(SIREN_CHANNEL_USER))
         entity = await client.get_entity(SIREN_CHANNEL_USER)
         REAL_SIREN_ID = int(f"-100{entity.id}")
-        await client.send_message(MAIN_ACCOUNT_USERNAME, f"🟢 **STRUM FIXED:**\nСинтаксис виправлено.\nРосійська мова додана.")
+        await client.send_message(MAIN_ACCOUNT_USERNAME, f"🟢 **STRUM FIXED:** Сінтаксіс виправлено.")
     except:
         await client.send_message(MAIN_ACCOUNT_USERNAME, "⚠️ Сирена: авто-пошук не вдався.")
 
