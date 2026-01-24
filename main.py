@@ -13,26 +13,27 @@ from telethon.tl.functions.channels import JoinChannelRequest
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
-# === НАЛАШТУВАННЯ ===
+# === НАСТРОЙКИ ===
 MY_PERSONAL_GROUP = "1.1"  
 MAIN_ACCOUNT_USERNAME = "@nemovisio" 
 CHANNEL_USERNAME = "@strum_dp"
 SIREN_CHANNEL_USER = "sirena_dp" 
 
-# === ЗМІННІ ===
+# === ПЕРЕМЕННЫЕ ===
 API_ID = int(os.environ['API_ID'])
 API_HASH = os.environ['API_HASH']
 SESSION_STRING = os.environ['TELEGRAM_SESSION']
 GEMINI_KEY = os.environ['GEMINI_API_KEY']
 GOOGLE_TOKEN = os.environ['GOOGLE_TOKEN_JSON']
 
+# Ссылки на медиа
 IMG_SCHEDULE = "https://arcanavisio.com/wp-content/uploads/2026/01/MAIN.jpg"
 IMG_UPDATE = "https://arcanavisio.com/wp-content/uploads/2026/01/UPDATE.jpg"
 IMG_EMERGENCY = "https://arcanavisio.com/wp-content/uploads/2026/01/EXTRA.jpg"
 IMG_ALARM = "https://arcanavisio.com/wp-content/uploads/2026/01/ALARM.jpg"
 IMG_ALL_CLEAR = "https://arcanavisio.com/wp-content/uploads/2026/01/REBOUND.jpg"
 
-# === СЛОВНИКИ (UA + RU) ===
+# === СЛОВАРИ (UA + RU) ===
 REGION_KEYWORDS = [
     'дніпропетровщина', 'дніпро', 'дтек', 
     'днепропетровщина', 'днепр', 'дтэк', 'днепропетровская'
@@ -59,17 +60,15 @@ def parse_text_all_groups(text):
     lines = text.split('\n')
     for line in lines:
         line_lower = line.lower().strip()
-        # Шукаємо цифри 1.1, 2.1... як окремі слова
+        # Ищем группы 1.1, 2.1 и т.д.
         found_groups = re.findall(r'\b(\d\.\d)\b', line_lower)
         if found_groups:
-            # Шукаємо час у форматі HH:MM
+            # Ищем временные интервалы
             times = re.findall(r'(\d{1,2}:\d{2}).*?(\d{1,2}:\d{2})', line_lower)
             if times:
                 today = datetime.now().strftime('%Y-%m-%d')
                 for gr in found_groups:
-                    # Фільтр: щоб не сплутати групу з частиною часу
                     if gr in [t[0] for t in times] or gr in [t[1] for t in times]: continue
-                    
                     for t in times:
                         start_str, end_str = t
                         schedule.append({
@@ -85,12 +84,7 @@ def ask_gemini_all_groups(photo_path, text):
         with open(photo_path, "rb") as image_file:
             image_data = base64.b64encode(image_file.read()).decode("utf-8")
     except: return "FILE_ERROR"
-    prompt = f"""
-    Analyze this DTEK schedule image.
-    Extract time ranges for ALL consumer groups (1.1, 1.2, 2.1, etc).
-    Return strictly JSON list: [{{ "group": "1.1", "start": "...", "end": "..." }}]
-    Date today: {datetime.now().strftime('%Y-%m-%d')}.
-    """
+    prompt = f"""Analyze this DTEK schedule image. Extract time ranges for ALL consumer groups. Return strictly JSON list: [{{"group": "1.1", "start": "...", "end": "..."}}] Date today: {datetime.now().strftime('%Y-%m-%d')}."""
     payload = {"contents": [{"parts": [{"text": prompt}, {"inline_data": {"mime_type": "image/jpeg", "data": image_data}}]}]}
     full_url = f"{url}?key={GEMINI_KEY}"
     for attempt in range(1, 11):
@@ -111,27 +105,7 @@ async def handler(event):
     text = (event.message.message or "").lower()
     chat_id = event.chat_id
     
-    # === 0. ШПИГУН ===
-    if event.is_private and event.out and event.fwd_from:
-        if event.fwd_from.from_id:
-             try:
-                 rid = getattr(event.fwd_from.from_id, 'channel_id', None)
-                 if rid: 
-                     global REAL_SIREN_ID
-                     REAL_SIREN_ID = int(f"-100{rid}")
-             except: pass
-
-    # === 1. ТЕСТ СИРЕНИ ===
-    if "test_siren" in text and event.out:
-        if "тривог" in text:
-            await client.send_message("me", "✅ Тест ТРИВОГИ...")
-            await client.send_message(CHANNEL_USERNAME, "🔴 **УВАГА! ПОВІТРЯНА ТРИВОГА!**", file=IMG_ALARM)
-        elif "відбій" in text:
-            await client.send_message("me", "✅ Тест ВІДБОЮ...")
-            await client.send_message(CHANNEL_USERNAME, "🟢 **ВІДБІЙ ПОВІТРЯНОЇ ТРИВОГИ!**", file=IMG_ALL_CLEAR)
-        return
-
-    # === 2. РЕАЛЬНА СИРЕНА ===
+    # === 0. СИРЕНА (ПРОВЕРКА ID) ===
     is_siren_source = False
     if REAL_SIREN_ID and chat_id == REAL_SIREN_ID: is_siren_source = True
     if not is_siren_source and event.chat and hasattr(event.chat, 'username') and event.chat.username:
@@ -142,99 +116,82 @@ async def handler(event):
         if "відбій" in text:
             await client.send_message(CHANNEL_USERNAME, "🟢 **ВІДБІЙ ПОВІТРЯНОЇ ТРИВОГИ!**", file=IMG_ALL_CLEAR)
         elif "тривог" in text or "оголошено" in text:
-            await client.send_message(CHANNEL_USERNAME, "🔴 **УВАГА! ПОВІТРЯНА ТРИВОГА!**\n\nВсім пройти в укриття!", file=IMG_ALARM)
+            await client.send_message(CHANNEL_USERNAME, "🔴 **УВАГА! ПОВІТРЯНА ТРИВОГА!**\n\nВсем в укрытие!", file=IMG_ALARM)
         return
 
-    # Фільтри каналів
-    allowed_channels = ['dtek_ua', 'avariykaaa', 'avariykaaa_dnepr_radar', 'me']
+    # Фильтры каналов
+    allowed_channels = ['dtek_ua', 'avariykaaa', 'avariykaaa_dnepr_radar', 'me', 'naglyadach_dnipro']
     chat_uname = ""
     if event.chat and hasattr(event.chat, 'username') and event.chat.username:
         chat_uname = event.chat.username.lower()
     
     if not is_siren_source and chat_uname not in allowed_channels: return 
-    
-    # Фільтр регіону (оновлений)
-    if chat_uname == 'dtek_ua':
-        if not any(k in text for k in REGION_KEYWORDS): return
+    if chat_uname == 'dtek_ua' and not any(k in text for k in REGION_KEYWORDS): return
 
-    # === 3. ЕКСТРЕНІ ===
+    # === 1. ЭКСТРЕННЫЕ ===
     if any(w in text for w in EMERGENCY_WORDS):
-        msg = "🚨 **ТРИВОГА: ЕКСТРЕНІ ВІДКЛЮЧЕННЯ!**\n(Экстренные отключения)"
+        msg = "🚨 **ТРИВОГА: ЕКСТРЕНІ ВІДКЛЮЧЕННЯ!**"
         await client.send_message(MAIN_ACCOUNT_USERNAME, msg, file=IMG_EMERGENCY)
         try: await client.send_message(CHANNEL_USERNAME, msg, file=IMG_EMERGENCY)
         except: pass
         return
 
-    # === 4. ТЕКСТ (З ПІДТРИМКОЮ RU + UA) ===
+    # === 2. ТЕКСТОВЫЕ ГРАФИКИ (UA + RU) ===
     if (re.search(r'\d\.\d', text)) and (re.search(r'\d{1,2}:\d{2}', text)):
         schedule = parse_text_all_groups(event.message.message)
-        
         is_update = any(w in text for w in UPDATE_WORDS)
         header_icon = "🔄" if is_update else "⚡️"
         header_text = "**ОНОВЛЕННЯ ГРАФІКУ:**" if is_update else "**Графік відключень:**"
         img_to_use = IMG_UPDATE if is_update else IMG_SCHEDULE
         
         if schedule:
-            await client.send_message(MAIN_ACCOUNT_USERNAME, f"{header_icon} **Текст:** Знайдено {len(schedule)} груп (Зміни: {is_update})")
+            await client.send_message(MAIN_ACCOUNT_USERNAME, f"{header_icon} Знайдено {len(schedule)} груп.")
             service = await get_tasks_service()
-            schedule.sort(key=lambda x: x['group'])
-            
             for entry in schedule:
                 start_dt = parser.parse(entry['start'])
                 end_dt = parser.parse(entry['end'])
                 grp = entry['group']
                 
-                # Google Tasks (ВИПРАВЛЕНО ПОМИЛКУ СИНТАКСИСУ)
                 if grp == MY_PERSONAL_GROUP:
                     notif_time = start_dt - timedelta(hours=2) - timedelta(minutes=10)
-                    
-                    # Виносимо змінні окремо - це безпечніше
                     base_title = "🔄 ИЗМЕНЕНИЕ" if is_update else "💡 СВЕТА НЕ БУДЕТ"
                     full_title = f"{base_title} (Гр. {grp})"
                     time_range = f"{start_dt.strftime('%H:%M')} - {end_dt.strftime('%H:%M')}"
                     due_iso = notif_time.isoformat() + 'Z'
                     
-                    task = {
+                    task_body = {
                         'title': full_title,
                         'notes': time_range,
                         'due': due_iso
                     }
-                    try: service.tasks().insert(tasklist='@default', body=task).execute()
+                    try: service.tasks().insert(tasklist='@default', body=task_body).execute()
                     except: pass
                 
-                # Telegram Post
                 msg = f"{header_icon} {header_text}\n**Група {grp}:** {start_dt.strftime('%H:%M')} - {end_dt.strftime('%H:%M')}"
                 try: await client.send_message(CHANNEL_USERNAME, msg, file=img_to_use)
                 except: pass
             return
 
-    # === 5. ФОТО ===
+    # === 3. ФОТО ГРАФИКИ ===
     if event.message.photo:
-        if processing_lock.locked(): await client.send_message(MAIN_ACCOUNT_USERNAME, "⏳ **Черга:** Чекаю...")
         async with processing_lock:
-            status_msg = await client.send_message(MAIN_ACCOUNT_USERNAME, "🛡 **Gemini:** Аналізую...")
             path = await event.message.download_media()
             result = await asyncio.to_thread(ask_gemini_all_groups, path, event.message.message)
             os.remove(path)
-            if isinstance(result, list):
-                if schedule := result:
-                    service = await get_tasks_service()
-                    schedule.sort(key=lambda x: x['group'])
-                    for entry in schedule:
-                        start_dt = parser.parse(entry['start'])
-                        end_dt = parser.parse(entry['end'])
-                        grp = entry.get('group', '?')
-                        if grp == MY_PERSONAL_GROUP:
-                            notif_time = start_dt - timedelta(hours=2) - timedelta(minutes=10)
-                            task = {'title': f"💡 СВЕТА НЕ БУДЕТ (Гр. {grp})", 'notes': f"{start_dt.strftime('%H:%M')} - {end_dt.strftime('%H:%M')}", 'due': notif_time.isoformat() + 'Z'}
-                            try: service.tasks().insert(tasklist='@default', body=task).execute()
-                            except: pass
-                        msg = f"⚡️ **Група {grp}:** Світла не буде з {start_dt.strftime('%H:%M')} до {end_dt.strftime('%H:%M')}"
-                        try: await client.send_message(CHANNEL_USERNAME, msg, file=IMG_SCHEDULE)
+            if isinstance(result, list) and result:
+                service = await get_tasks_service()
+                for entry in result:
+                    start_dt = parser.parse(entry['start'])
+                    end_dt = parser.parse(entry['end'])
+                    grp = entry.get('group', '?')
+                    if grp == MY_PERSONAL_GROUP:
+                        due_iso = (start_dt - timedelta(hours=2, minutes=10)).isoformat() + 'Z'
+                        task_body = {'title': f"💡 СВЕТА НЕ БУДЕТ (Гр. {grp})", 'notes': f"{start_dt.strftime('%H:%M')} - {end_dt.strftime('%H:%M')}", 'due': due_iso}
+                        try: service.tasks().insert(tasklist='@default', body=task_body).execute()
                         except: pass
-                    await client.delete_messages(None, status_msg)
-                else: await client.edit_message(status_msg, "✅ **Чисто:** Не бачу графіків.")
-            else: await client.edit_message(status_msg, f"❌ **Помилка:** {str(result)}")
+                    msg = f"⚡️ **Група {grp}:** {start_dt.strftime('%H:%M')} - {end_dt.strftime('%H:%M')}"
+                    try: await client.send_message(CHANNEL_USERNAME, msg, file=IMG_SCHEDULE)
+                    except: pass
 
 async def startup_check():
     global REAL_SIREN_ID
@@ -242,9 +199,9 @@ async def startup_check():
         await client(JoinChannelRequest(SIREN_CHANNEL_USER))
         entity = await client.get_entity(SIREN_CHANNEL_USER)
         REAL_SIREN_ID = int(f"-100{entity.id}")
-        await client.send_message(MAIN_ACCOUNT_USERNAME, f"🟢 **STRUM FIXED:** Сінтаксіс виправлено.")
-    except:
-        await client.send_message(MAIN_ACCOUNT_USERNAME, "⚠️ Сирена: авто-пошук не вдався.")
+        await client.send_message(MAIN_ACCOUNT_USERNAME, f"🟢 **STRUM FIXED**: Ошибка исправлена. Полиглот активен.")
+    except Exception as e:
+        await client.send_message(MAIN_ACCOUNT_USERNAME, f"⚠️ Ошибка запуска: {e}")
 
 with client:
     client.loop.run_until_complete(startup_check())
