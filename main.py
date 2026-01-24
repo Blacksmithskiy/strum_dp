@@ -46,7 +46,6 @@ IMG_UPDATE = "https://arcanavisio.com/wp-content/uploads/2026/01/UPDATE.jpg"
 IMG_EMERGENCY = "https://arcanavisio.com/wp-content/uploads/2026/01/EXTRA.jpg"
 IMG_ALARM = "https://arcanavisio.com/wp-content/uploads/2026/01/ALARM.jpg"
 IMG_ALL_CLEAR = "https://arcanavisio.com/wp-content/uploads/2026/01/REBOUND.jpg"
-# Нові картинки
 IMG_MORNING = "https://arcanavisio.com/wp-content/uploads/2026/01/MORN.jpg"
 IMG_EVENING = "https://arcanavisio.com/wp-content/uploads/2026/01/EVN.jpg"
 
@@ -99,7 +98,7 @@ async def morning_digest_loop():
         await asyncio.sleep(wait_seconds)
         
         try:
-            # Погода на СЬОГОДНІ (index 0)
+            # Погода на СЬОГОДНІ
             url = f"https://api.open-meteo.com/v1/forecast?latitude={DNIPRO_LAT}&longitude={DNIPRO_LON}&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max&timezone=Europe%2FKyiv"
             w_res = requests.get(url).json()
             daily = w_res.get('daily', {})
@@ -145,7 +144,7 @@ async def evening_digest_loop():
         await asyncio.sleep(wait_seconds)
         
         try:
-            # Погода на ЗАВТРА (index 1)
+            # Погода на ЗАВТРА
             url = f"https://api.open-meteo.com/v1/forecast?latitude={DNIPRO_LAT}&longitude={DNIPRO_LON}&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max&timezone=Europe%2FKyiv"
             w_res = requests.get(url).json()
             daily = w_res.get('daily', {})
@@ -317,10 +316,11 @@ async def handler(event):
             await client.send_message(CHANNEL_USERNAME, msg, file=IMG_ALARM)
         return
 
-    # === 2. ЕКСТРЕНІ ===
+    # === 2. ЕКСТРЕНІ (ЗМІНЕНО: БЕЗ СЛОВА ТРИВОГА) ===
     if any(w in text for w in ['екстрені', 'экстренные', 'скасовані', 'отмена']):
         if any(k in text for k in ['дніпро', 'днепр', 'дтек', 'дтэк']):
-            msg = "🚨 **ТРИВОГА: ЕКСТРЕНІ ВІДКЛЮЧЕННЯ!**" + FOOTER_TEXT
+            # Виправлений рядок нижче:
+            msg = "🚨 **ЕКСТРЕНІ ВІДКЛЮЧЕННЯ!**" + FOOTER_TEXT
             await client.send_message(CHANNEL_USERNAME, msg, file=IMG_EMERGENCY)
             return
 
@@ -418,16 +418,16 @@ async def startup_check():
         await client(JoinChannelRequest(SIREN_CHANNEL_USER))
         entity = await client.get_entity(SIREN_CHANNEL_USER)
         REAL_SIREN_ID = int(f"-100{entity.id}")
-        await client.send_message(MAIN_ACCOUNT_USERNAME, f"🟢 **STRUM:** Працює. 08:00 (Ранок) + 22:00 (Вечір).")
+        await client.send_message(MAIN_ACCOUNT_USERNAME, f"🟢 **STRUM:** Працює. Екстрені = Тільки 🚨.")
     except:
         pass
 
 # === ЗАПУСК ===
 if __name__ == '__main__':
     client.start()
-    client.loop.create_task(check_weather_alerts()) # Погода (фоном)
-    client.loop.create_task(morning_digest_loop())  # Ранок (08:00)
-    client.loop.create_task(evening_digest_loop())  # Вечір (22:00)
+    client.loop.create_task(check_weather_alerts()) 
+    client.loop.create_task(morning_digest_loop())  
+    client.loop.create_task(evening_digest_loop())  
     client.loop.run_until_complete(startup_check())
-    print("Bot is running (Full Mode)...")
+    print("Bot is running...")
     client.run_until_disconnected()
