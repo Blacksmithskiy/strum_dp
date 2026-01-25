@@ -14,7 +14,7 @@ from telethon.tl.functions.channels import JoinChannelRequest
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
-# === НАСТРОЙКИ ===
+# === НАЛАШТУВАННЯ ===
 MY_PERSONAL_GROUP = "1.1"
 MAIN_ACCOUNT_USERNAME = "@nemovisio"
 CHANNEL_USERNAME = "@strum_dp"
@@ -22,14 +22,14 @@ SIREN_CHANNEL_USER = "sirena_dp"
 DNIPRO_LAT = 48.46
 DNIPRO_LON = 35.04
 
-# === ПЕРЕМЕННЫЕ ОКРУЖЕНИЯ ===
+# === ЗМІННІ ===
 API_ID = int(os.environ['API_ID'])
 API_HASH = os.environ['API_HASH']
 SESSION_STRING = os.environ['TELEGRAM_SESSION']
 GEMINI_KEY = os.environ['GEMINI_API_KEY']
 GOOGLE_TOKEN = os.environ['GOOGLE_TOKEN_JSON']
 
-# === НОВЫЕ ССЫЛКИ НА МЕДИА ===
+# === МЕДІА ===
 URL_MORNING = "https://arcanavisio.com/wp-content/uploads/2026/01/01_MORNING.jpg"
 URL_EVENING = "https://arcanavisio.com/wp-content/uploads/2026/01/02_EVENING.jpg"
 URL_GRAFIC = "https://arcanavisio.com/wp-content/uploads/2026/01/03_GRAFIC.jpg"
@@ -39,7 +39,7 @@ URL_EXTRA_STOP = "https://arcanavisio.com/wp-content/uploads/2026/01/06_EXTRA_ST
 URL_TREVOGA = "https://arcanavisio.com/wp-content/uploads/2026/01/07_TREVOGA.jpg"
 URL_TREVOGA_STOP = "https://arcanavisio.com/wp-content/uploads/2026/01/08_TREVOGA_STOP.jpg"
 
-# === НОВЫЕ ТЕКСТЫ ===
+# === ТЕКСТИ ===
 TXT_TREVOGA = "⚠️❗️ **УВАГА! ОГОЛОШЕНО ПОВІТРЯННУ ТРИВОГУ.**\n🏃 **ВСІМ ПРОЙТИ В УКРИТТЯ.**"
 TXT_TREVOGA_STOP = "✅ **ВІДБІЙ ПОВІТРЯННОЇ ТРИВОГИ.**"
 TXT_EXTRA_START = "⚡❗️**УВАГА! ЗАСТОСОВАНІ ЕКСТРЕНІ ВІДКЛЮЧЕННЯ.**\n**ПІД ЧАС ЕКСТРЕНИХ ВІДКЛЮЧЕНЬ ГРАФІКИ НЕ ДІЮТЬ.**"
@@ -57,7 +57,7 @@ ___
 
 @strum_dp"""
 
-# Мотивация
+# Мотивація
 MOTIVATION = [
     "Сьогодні чудовий день, щоб зробити щось важливе!",
     "Навіть найтемніша ніч закінчується світанком.",
@@ -81,25 +81,19 @@ async def get_tasks_service():
     creds = Credentials.from_authorized_user_info(creds_dict)
     return build('tasks', 'v1', credentials=creds)
 
-# === ФУНКЦИЯ БЕЗОПАСНОЙ ОТПРАВКИ (FIX) ===
+# === БЕЗПЕЧНА ВІДПРАВКА ===
 async def send_safe(text, img_url):
-    """Скачивает картинку и отправляет как файл, чтобы Telegram не давал сбой"""
     try:
-        # Скачиваем картинку в память бота
         response = await asyncio.to_thread(requests.get, img_url)
         if response.status_code == 200:
-            file_bytes = response.content
-            await client.send_message(CHANNEL_USERNAME, text + FOOTER, file=file_bytes)
+            await client.send_message(CHANNEL_USERNAME, text + FOOTER, file=response.content)
         else:
-            # Если скачать не вышло, шлем просто текст, чтобы не молчать
             await client.send_message(CHANNEL_USERNAME, text + FOOTER)
-    except Exception as e:
-        print(f"Send Error: {e}")
-        # Крайний случай - просто текст
+    except:
         try: await client.send_message(CHANNEL_USERNAME, text + FOOTER)
         except: pass
 
-# === 1. УТРО (08:00) ===
+# === 1. РАНОК (08:00) ===
 async def morning_loop():
     while True:
         now = datetime.now()
@@ -122,7 +116,7 @@ async def morning_loop():
         except: pass
         await asyncio.sleep(60)
 
-# === 2. ВЕЧЕР (22:00) ===
+# === 2. ВЕЧІР (22:00) ===
 async def evening_loop():
     while True:
         now = datetime.now()
@@ -188,20 +182,18 @@ async def handler(event):
             await send_safe(TXT_TREVOGA, URL_TREVOGA)
         return
 
-    # === ЭКСТРЕННЫЕ ===
-    # Скасування
+    # === ЕКСТРЕНІ ===
     if any(w in text for w in ['екстрені', 'экстренные']) and any(w in text for w in ['скасовані', 'отмена']):
         if any(w in text for w in ['дніпро', 'днепр', 'дтек', 'дтэк']):
             await send_safe(TXT_EXTRA_STOP, URL_EXTRA_STOP)
             return
 
-    # Начало (если нет слова скасовано)
     if any(w in text for w in ['екстрені', 'экстренные']):
         if any(w in text for w in ['дніпро', 'днепр', 'дтек', 'дтэк']):
             await send_safe(TXT_EXTRA_START, URL_EXTRA_START)
             return
 
-    # === ГРАФИКИ ===
+    # === ГРАФІКИ ===
     schedule = []
     if re.search(r'\d\.\d', text) and re.search(r'\d{1,2}:\d{2}', text):
         schedule = parse_schedule(event.message.message)
@@ -217,10 +209,7 @@ async def handler(event):
         service = await get_tasks_service()
         schedule.sort(key=lambda x: x.get('group', ''))
         
-        # Определяем тип (Обновление или Обычный)
         is_update = any(w in text for w in ['зміни', 'оновлення', 'изменения', 'обновление', 'новые'])
-        
-        # Дата
         date_now = datetime.now().strftime('%d.%m.%Y')
         
         if is_update:
@@ -243,9 +232,15 @@ async def handler(event):
                 if prev_grp and main_grp != prev_grp: msg_lines.append("➖➖➖➖➖➖➖➖")
                 prev_grp = main_grp
                 
-                msg_lines.append(f"🔹 **Гр. {grp}:** {start.strftime('%H:%M')} - {end.strftime('%H:%M')}")
+                # --- ВИДІЛЕННЯ ГРУПИ 1.1 ---
+                if grp == MY_PERSONAL_GROUP:
+                    msg_lines.append("🔸🔸🔸🔸🔸🔸")
+                    msg_lines.append(f"🏠 **Гр. {grp}:** {start.strftime('%H:%M')} - {end.strftime('%H:%M')}")
+                    msg_lines.append("🔸🔸🔸🔸🔸🔸")
+                else:
+                    msg_lines.append(f"🔹 **Гр. {grp}:** {start.strftime('%H:%M')} - {end.strftime('%H:%M')}")
                 
-                # Tasks (1.1)
+                # Tasks (тільки 1.1)
                 if grp == MY_PERSONAL_GROUP:
                     notif = start - timedelta(hours=2, minutes=10)
                     task = {'title': f"💡 СВІТЛО (Гр. {grp})", 'notes': f"{start.strftime('%H:%M')}-{end.strftime('%H:%M')}", 'due': notif.isoformat() + 'Z'}
