@@ -46,7 +46,6 @@ TXT_TREVOGA_STOP = "✅ **ВІДБІЙ ПОВІТРЯННОЇ ТРИВОГИ.**"
 TXT_EXTRA_START = "⚡❗️**УВАГА! ЗАСТОСОВАНІ ЕКСТРЕНІ ВІДКЛЮЧЕННЯ.**\n\n**ПІД ЧАС ЕКСТРЕНИХ ВІДКЛЮЧЕНЬ ГРАФІКИ НЕ ДІЮТЬ.**"
 TXT_EXTRA_STOP = "⚡️✔️ **ЕКСТРЕНІ ВІДКЛЮЧЕННЯ СВІТЛА СКАСОВАНІ.**"
 
-# === ОНОВЛЕНИЙ ФУТЕР ===
 FOOTER = """
 ______
 
@@ -81,7 +80,7 @@ async def get_tasks_service():
     creds = Credentials.from_authorized_user_info(creds_dict)
     return build('tasks', 'v1', credentials=creds)
 
-# === БЕЗПЕЧНА ВІДПРАВКА (ЯК ФОТО) ===
+# === БЕЗПЕЧНА ВІДПРАВКА ===
 async def send_safe(text, img_url):
     try:
         response = await asyncio.to_thread(requests.get, img_url)
@@ -96,45 +95,49 @@ async def send_safe(text, img_url):
         try: await client.send_message(CHANNEL_USERNAME, text + FOOTER)
         except: pass
 
-# === 1. РАНОК (08:00) ===
+# === ЛОГІКА ДАЙДЖЕСТІВ (Винесена в окремі функції) ===
+async def send_morning_digest():
+    try:
+        url = f"https://api.open-meteo.com/v1/forecast?latitude={DNIPRO_LAT}&longitude={DNIPRO_LON}&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max&timezone=Europe%2FKyiv"
+        w = requests.get(url).json().get('daily', {})
+        t_min, t_max = w['temperature_2m_min'][0], w['temperature_2m_max'][0]
+        rain = w['precipitation_probability_max'][0]
+        
+        w_text = f"🌡 **Температура:** {t_min}°C ... {t_max}°C\n☔️ **Опади:** {'Можливі' if rain > 50 else 'Малоймовірні'} ({rain}%)"
+        status = "🔴 Тривога активна!" if IS_ALARM_ACTIVE else "🟢 Небо чисте."
+        quote = random.choice(MOTIVATION)
+        
+        msg = f"☀️ **ДОБРОГО РАНКУ, ДНІПРО!**\n\n{w_text}\n\n📢 **Статус:** {status}\n\n💬 _{quote}_"
+        await send_safe(msg, URL_MORNING)
+    except Exception as e: print(f"Morning Error: {e}")
+
+async def send_evening_digest():
+    try:
+        url = f"https://api.open-meteo.com/v1/forecast?latitude={DNIPRO_LAT}&longitude={DNIPRO_LON}&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max&timezone=Europe%2FKyiv"
+        w = requests.get(url).json().get('daily', {})
+        t_min, t_max = w['temperature_2m_min'][1], w['temperature_2m_max'][1]
+        
+        msg = f"🌒 **НА ДОБРАНІЧ, ДНІПРО!**\n\n🌡 **Погода на завтра:** {t_min}°C ... {t_max}°C\n\n🔋 Не забудьте перевірити заряд гаджетів."
+        await send_safe(msg, URL_EVENING)
+    except Exception as e: print(f"Evening Error: {e}")
+
+# === ТАЙМЕРИ ===
 async def morning_loop():
     while True:
         now = datetime.now()
-        target = now.replace(hour=9, minute=15, second=0, microsecond=0)
+        target = now.replace(hour=8, minute=0, second=0, microsecond=0)
         if now >= target: target += timedelta(days=1)
         await asyncio.sleep((target - now).total_seconds())
-        
-        try:
-            url = f"https://api.open-meteo.com/v1/forecast?latitude={DNIPRO_LAT}&longitude={DNIPRO_LON}&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max&timezone=Europe%2FKyiv"
-            w = requests.get(url).json().get('daily', {})
-            t_min, t_max = w['temperature_2m_min'][0], w['temperature_2m_max'][0]
-            rain = w['precipitation_probability_max'][0]
-            
-            w_text = f"🌡 **Температура:** {t_min}°C ... {t_max}°C\n☔️ **Опади:** {'Можливі' if rain > 50 else 'Малоймовірні'} ({rain}%)"
-            status = "🔴 Тривога активна!" if IS_ALARM_ACTIVE else "🟢 Небо чисте."
-            quote = random.choice(MOTIVATION)
-            
-            msg = f"☀️ **ДОБРОГО РАНКУ, ДНІПРО!**\n\n{w_text}\n\n📢 **Статус:** {status}\n\n💬 _{quote}_"
-            await send_safe(msg, URL_MORNING)
-        except: pass
+        await send_morning_digest()
         await asyncio.sleep(60)
 
-# === 2. ВЕЧІР (22:00) ===
 async def evening_loop():
     while True:
         now = datetime.now()
         target = now.replace(hour=22, minute=0, second=0, microsecond=0)
         if now >= target: target += timedelta(days=1)
         await asyncio.sleep((target - now).total_seconds())
-        
-        try:
-            url = f"https://api.open-meteo.com/v1/forecast?latitude={DNIPRO_LAT}&longitude={DNIPRO_LON}&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max&timezone=Europe%2FKyiv"
-            w = requests.get(url).json().get('daily', {})
-            t_min, t_max = w['temperature_2m_min'][1], w['temperature_2m_max'][1]
-            
-            msg = f"🌒 **НА ДОБРАНІЧ, ДНІПРО!**\n\n🌡 **Погода на завтра:** {t_min}°C ... {t_max}°C\n\n🔋 Не забудьте перевірити заряд гаджетів."
-            await send_safe(msg, URL_EVENING)
-        except: pass
+        await send_evening_digest()
         await asyncio.sleep(60)
 
 # === ПАРСЕР ===
@@ -168,6 +171,17 @@ async def handler(event):
     text = (event.message.message or "").lower()
     chat_id = event.chat_id
     global IS_ALARM_ACTIVE
+
+    # === РУЧНІ ТЕСТИ (ДЛЯ ПЕРЕВІРКИ) ===
+    if event.out and "test_morning" in text:
+        await event.respond("🌅 Тестую ранок...")
+        await send_morning_digest()
+        return
+
+    if event.out and "test_evening" in text:
+        await event.respond("🌙 Тестую вечір...")
+        await send_evening_digest()
+        return
 
     # === СИРЕНА ===
     is_siren = False
@@ -235,13 +249,11 @@ async def handler(event):
                 if prev_grp and main_grp != prev_grp: msg_lines.append("➖➖➖➖➖➖➖➖")
                 prev_grp = main_grp
                 
-                # Компактне виділення 1.1
                 if grp == MY_PERSONAL_GROUP:
                     msg_lines.append(f"👉 🏠 **Гр. {grp}:** {start.strftime('%H:%M')} - {end.strftime('%H:%M')} 👈")
                 else:
                     msg_lines.append(f"🔹 **Гр. {grp}:** {start.strftime('%H:%M')} - {end.strftime('%H:%M')}")
                 
-                # Tasks (тільки 1.1)
                 if grp == MY_PERSONAL_GROUP:
                     notif = start - timedelta(hours=2, minutes=10)
                     task = {'title': f"💡 СВІТЛО (Гр. {grp})", 'notes': f"{start.strftime('%H:%M')}-{end.strftime('%H:%M')}", 'due': notif.isoformat() + 'Z'}
