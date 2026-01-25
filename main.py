@@ -6,6 +6,7 @@ import re
 import requests
 import asyncio
 import random
+import io  # <--- Добавлено для правильной обработки фото
 from datetime import datetime, timedelta
 from dateutil import parser
 from telethon import TelegramClient, events
@@ -29,7 +30,7 @@ SESSION_STRING = os.environ['TELEGRAM_SESSION']
 GEMINI_KEY = os.environ['GEMINI_API_KEY']
 GOOGLE_TOKEN = os.environ['GOOGLE_TOKEN_JSON']
 
-# === МЕДІА ===
+# === МЕДІА (ПОСИЛАННЯ) ===
 URL_MORNING = "https://arcanavisio.com/wp-content/uploads/2026/01/01_MORNING.jpg"
 URL_EVENING = "https://arcanavisio.com/wp-content/uploads/2026/01/02_EVENING.jpg"
 URL_GRAFIC = "https://arcanavisio.com/wp-content/uploads/2026/01/03_GRAFIC.jpg"
@@ -81,15 +82,22 @@ async def get_tasks_service():
     creds = Credentials.from_authorized_user_info(creds_dict)
     return build('tasks', 'v1', credentials=creds)
 
-# === БЕЗПЕЧНА ВІДПРАВКА ===
+# === БЕЗПЕЧНА ВІДПРАВКА (ЯК ФОТО) ===
 async def send_safe(text, img_url):
     try:
+        # 1. Скачуємо
         response = await asyncio.to_thread(requests.get, img_url)
         if response.status_code == 200:
-            await client.send_message(CHANNEL_USERNAME, text + FOOTER, file=response.content)
+            # 2. Перетворюємо в "віртуальний файл" з розширенням .jpg
+            # Це змушує Телеграм думати, що ми відправляємо фото, а не документ
+            photo_file = io.BytesIO(response.content)
+            photo_file.name = "image.jpg" 
+            
+            await client.send_message(CHANNEL_USERNAME, text + FOOTER, file=photo_file)
         else:
             await client.send_message(CHANNEL_USERNAME, text + FOOTER)
-    except:
+    except Exception as e:
+        print(f"Send Error: {e}")
         try: await client.send_message(CHANNEL_USERNAME, text + FOOTER)
         except: pass
 
