@@ -100,7 +100,7 @@ async def send_safe(text, img_url):
 async def morning_loop():
     while True:
         now = datetime.now()
-        target = now.replace(hour=9, minute=2, second=0, microsecond=0)
+        target = now.replace(hour=9, minute=15, second=0, microsecond=0)
         if now >= target: target += timedelta(days=1)
         await asyncio.sleep((target - now).total_seconds())
         
