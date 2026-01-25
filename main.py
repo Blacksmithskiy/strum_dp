@@ -79,65 +79,98 @@ MOTIVATION = [
 processing_lock = asyncio.Lock()
 REAL_SIREN_ID = None
 IS_ALARM_ACTIVE = False 
-
-# Хедери, щоб сайт не блокував бота
-HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-}
+HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
 
 async def get_tasks_service():
     creds_dict = json.loads(GOOGLE_TOKEN)
     creds = Credentials.from_authorized_user_info(creds_dict)
     return build('tasks', 'v1', credentials=creds)
 
+# === ФУНКЦІЯ ОТРИМАННЯ ПОГОДИ (Retry Logic) ===
+def get_weather(is_tomorrow=False):
+    url = f"https://api.open-meteo.com/v1/forecast?latitude={DNIPRO_LAT}&longitude={DNIPRO_LON}&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max&current=temperature_2m,wind_speed_10m&timezone=Europe%2FKyiv"
+    for attempt in range(3):
+        try:
+            r = requests.get(url, headers=HEADERS, timeout=20)
+            if r.status_code == 200:
+                return r.json()
+        except Exception as e:
+            logger.warning(f"Weather attempt {attempt+1} failed: {e}")
+            time.sleep(2)
+    return None
+
 # === БЕЗПЕЧНА ВІДПРАВКА ===
 async def send_safe(text, img_url):
-    logger.info(f"Attempting to send message with image: {img_url}")
     try:
-        # Скачування з тайм-аутом 15 секунд
         response = await asyncio.to_thread(requests.get, img_url, headers=HEADERS, timeout=15)
-        
         if response.status_code == 200:
             photo_file = io.BytesIO(response.content)
             photo_file.name = "image.jpg"
             await client.send_message(CHANNEL_USERNAME, text + FOOTER, file=photo_file)
-            logger.info("Message sent successfully with image.")
         else:
-            logger.error(f"Image download failed: {response.status_code}")
             await client.send_message(CHANNEL_USERNAME, text + FOOTER)
     except Exception as e:
         logger.error(f"Send Error: {e}")
-        # Якщо все зламалось, шлемо хоча б текст
         try: await client.send_message(CHANNEL_USERNAME, text + FOOTER)
         except: pass
 
 # === ДАЙДЖЕСТИ ===
 async def send_morning_digest():
-    logger.info("Preparing Morning Digest...")
-    try:
-        url = f"https://api.open-meteo.com/v1/forecast?latitude={DNIPRO_LAT}&longitude={DNIPRO_LON}&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max&timezone=Europe%2FKyiv"
-        w = requests.get(url, timeout=10).json().get('daily', {})
-        t_min, t_max = w['temperature_2m_min'][0], w['temperature_2m_max'][0]
-        rain = w['precipitation_probability_max'][0]
-        
+    logger.info("Morning Digest Triggered")
+    data = await asyncio.to_thread(get_weather)
+    
+    if data:
+        t_min = data['daily']['temperature_2m_min'][0]
+        t_max = data['daily']['temperature_2m_max'][0]
+        rain = data['daily']['precipitation_probability_max'][0]
         w_text = f"🌡 **Температура:** {t_min}°C ... {t_max}°C\n☔️ **Опади:** {'Можливі' if rain > 50 else 'Малоймовірні'} ({rain}%)"
-        status = "🔴 Тривога активна!" if IS_ALARM_ACTIVE else "🟢 Небо чисте."
-        quote = random.choice(MOTIVATION)
-        
-        msg = f"☀️ **ДОБРОГО РАНКУ, ДНІПРО!**\n\n{w_text}\n\n📢 **Статус:** {status}\n\n💬 _{quote}_"
-        await send_safe(msg, URL_MORNING)
-    except Exception as e: logger.error(f"Morning Error: {e}")
+    else:
+        w_text = "🌡 **Погода:** Тимчасово недоступна."
+
+    status = "🔴 Тривога активна!" if IS_ALARM_ACTIVE else "🟢 Небо чисте."
+    quote = random.choice(MOTIVATION)
+    msg = f"☀️ **ДОБРОГО РАНКУ, ДНІПРО!**\n\n{w_text}\n\n📢 **Статус:** {status}\n\n💬 _{quote}_"
+    await send_safe(msg, URL_MORNING)
 
 async def send_evening_digest():
-    logger.info("Preparing Evening Digest...")
-    try:
-        url = f"https://api.open-meteo.com/v1/forecast?latitude={DNIPRO_LAT}&longitude={DNIPRO_LON}&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max&timezone=Europe%2FKyiv"
-        w = requests.get(url, timeout=10).json().get('daily', {})
-        t_min, t_max = w['temperature_2m_min'][1], w['temperature_2m_max'][1]
-        
-        msg = f"🌒 **НА ДОБРАНІЧ, ДНІПРО!**\n\n🌡 **Погода на завтра:** {t_min}°C ... {t_max}°C\n\n🔋 Не забудьте перевірити заряд гаджетів."
-        await send_safe(msg, URL_EVENING)
-    except Exception as e: logger.error(f"Evening Error: {e}")
+    logger.info("Evening Digest Triggered")
+    data = await asyncio.to_thread(get_weather)
+
+    if data:
+        t_min = data['daily']['temperature_2m_min'][1] # Завтра
+        t_max = data['daily']['temperature_2m_max'][1]
+        w_text = f"🌡 **Погода на завтра:** {t_min}°C ... {t_max}°C"
+    else:
+        w_text = "🌡 **Погода на завтра:** Дані оновлюються."
+
+    msg = f"🌒 **НА ДОБРАНІЧ, ДНІПРО!**\n\n{w_text}\n\n🔋 Не забудьте перевірити заряд гаджетів."
+    await send_safe(msg, URL_EVENING)
+
+# === МОНІТОР ПОГОДИ (ДЛЯ АЛЕРТІВ) ===
+async def check_weather_alerts(test_mode=False):
+    data = await asyncio.to_thread(get_weather)
+    if not data: 
+        if test_mode: await client.send_message(CHANNEL_USERNAME, "⚠️ Не вдалося отримати дані погоди.")
+        return
+
+    curr = data.get('current', {})
+    temp = curr.get('temperature_2m', 0)
+    wind = curr.get('wind_speed_10m', 0)
+    
+    alerts = []
+    if temp < -10: alerts.append(f"🥶 **СИЛЬНИЙ МОРОЗ: {temp}°C!**")
+    if temp > 30: alerts.append(f"🥵 **СИЛЬНА СПЕКА: {temp}°C!**")
+    if wind > 15: alerts.append(f"💨 **ШТОРМОВИЙ ВІТЕР: {wind} м/с!**")
+    
+    # Якщо це ТЕСТ - показуємо погоду в будь-якому випадку
+    if test_mode:
+        test_msg = f"🧪 **ТЕСТ ПОГОДИ:**\n🌡 Температура: {temp}°C\n💨 Вітер: {wind} м/с"
+        if alerts: test_msg += "\n\n⚠️ **АЛЕРТИ:**\n" + "\n".join(alerts)
+        else: test_msg += "\n\n✅ Алертів немає (погода в нормі)."
+        await client.send_message(CHANNEL_USERNAME, test_msg)
+    elif alerts:
+        # У бойовому режимі - тільки якщо є алерти
+        await client.send_message(CHANNEL_USERNAME, "\n".join(alerts) + FOOTER)
 
 # === ТАЙМЕРИ ===
 async def morning_loop():
@@ -157,6 +190,11 @@ async def evening_loop():
         await asyncio.sleep((target - now).total_seconds())
         await send_evening_digest()
         await asyncio.sleep(60)
+
+async def weather_loop():
+    while True:
+        await check_weather_alerts(test_mode=False)
+        await asyncio.sleep(1800) # Раз на 30 хв
 
 # === ПАРСЕР ===
 def parse_schedule(text):
@@ -190,28 +228,28 @@ async def handler(event):
     chat_id = event.chat_id
     global IS_ALARM_ACTIVE
 
-    # === Ping ===
-    if event.out and "/ping" in text:
-        await event.respond("✅ **PONG!** Я в мережі.")
-        return
-
     # === РУЧНІ ТЕСТИ ===
-    if event.out and "test_morning" in text:
-        logger.info("Manual test: Morning")
-        await event.respond("⏳ Обробляю ранок...")
-        await send_morning_digest()
-        return
-
-    if event.out and "test_evening" in text:
-        logger.info("Manual test: Evening")
-        await event.respond("⏳ Обробляю вечір...")
-        await send_evening_digest()
-        return
+    if event.out:
+        if "test_morning" in text:
+            await event.respond("🌅 Sending morning...")
+            await send_morning_digest()
+            return
+        if "test_evening" in text:
+            await event.respond("🌙 Sending evening...")
+            await send_evening_digest()
+            return
+        if "test_weather" in text:
+            await event.respond("💨 Checking weather...")
+            await check_weather_alerts(test_mode=True)
+            return
 
     # === СИРЕНА ===
     is_siren = False
     if REAL_SIREN_ID and chat_id == REAL_SIREN_ID: is_siren = True
-    if event.chat and getattr(event.chat, 'username', '').lower() == SIREN_CHANNEL_USER: is_siren = True
+    # БЕЗПЕЧНА ПЕРЕВІРКА ЮЗЕРНЕЙМУ:
+    username = (getattr(event.chat, 'username', '') or '').lower()
+    if username == SIREN_CHANNEL_USER: is_siren = True
+    
     if "test_siren" in text and event.out: is_siren = True
     if event.fwd_from and ("сирена" in text or "тривог" in text): is_siren = True
 
@@ -295,12 +333,13 @@ async def startup():
         await client(JoinChannelRequest(SIREN_CHANNEL_USER))
         e = await client.get_entity(SIREN_CHANNEL_USER)
         REAL_SIREN_ID = int(f"-100{e.id}")
-        print("✅ Bot Started.")
+        logger.info("✅ Bot Started.")
     except: pass
 
 if __name__ == '__main__':
     client.start()
     client.loop.create_task(morning_loop())
     client.loop.create_task(evening_loop())
+    client.loop.create_task(weather_loop())
     client.loop.run_until_complete(startup())
     client.run_until_disconnected()
