@@ -7,6 +7,7 @@ import requests
 import asyncio
 import random
 import io
+import logging
 from datetime import datetime, timedelta
 from dateutil import parser
 from telethon import TelegramClient, events
@@ -14,6 +15,10 @@ from telethon.sessions import StringSession
 from telethon.tl.functions.channels import JoinChannelRequest
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
+
+# === ЛОГУВАННЯ ===
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # === НАЛАШТУВАННЯ ===
 MY_PERSONAL_GROUP = "1.1"
@@ -30,7 +35,7 @@ SESSION_STRING = os.environ['TELEGRAM_SESSION']
 GEMINI_KEY = os.environ['GEMINI_API_KEY']
 GOOGLE_TOKEN = os.environ['GOOGLE_TOKEN_JSON']
 
-# === МЕДІА (ПОСИЛАННЯ) ===
+# === МЕДІА ===
 URL_MORNING = "https://arcanavisio.com/wp-content/uploads/2026/01/01_MORNING.jpg"
 URL_EVENING = "https://arcanavisio.com/wp-content/uploads/2026/01/02_EVENING.jpg"
 URL_GRAFIC = "https://arcanavisio.com/wp-content/uploads/2026/01/03_GRAFIC.jpg"
@@ -75,6 +80,11 @@ processing_lock = asyncio.Lock()
 REAL_SIREN_ID = None
 IS_ALARM_ACTIVE = False 
 
+# Хедери, щоб сайт не блокував бота
+HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+}
+
 async def get_tasks_service():
     creds_dict = json.loads(GOOGLE_TOKEN)
     creds = Credentials.from_authorized_user_info(creds_dict)
@@ -82,24 +92,31 @@ async def get_tasks_service():
 
 # === БЕЗПЕЧНА ВІДПРАВКА ===
 async def send_safe(text, img_url):
+    logger.info(f"Attempting to send message with image: {img_url}")
     try:
-        response = await asyncio.to_thread(requests.get, img_url)
+        # Скачування з тайм-аутом 15 секунд
+        response = await asyncio.to_thread(requests.get, img_url, headers=HEADERS, timeout=15)
+        
         if response.status_code == 200:
             photo_file = io.BytesIO(response.content)
             photo_file.name = "image.jpg"
             await client.send_message(CHANNEL_USERNAME, text + FOOTER, file=photo_file)
+            logger.info("Message sent successfully with image.")
         else:
+            logger.error(f"Image download failed: {response.status_code}")
             await client.send_message(CHANNEL_USERNAME, text + FOOTER)
     except Exception as e:
-        print(f"Send Error: {e}")
+        logger.error(f"Send Error: {e}")
+        # Якщо все зламалось, шлемо хоча б текст
         try: await client.send_message(CHANNEL_USERNAME, text + FOOTER)
         except: pass
 
-# === ЛОГІКА ДАЙДЖЕСТІВ (Винесена в окремі функції) ===
+# === ДАЙДЖЕСТИ ===
 async def send_morning_digest():
+    logger.info("Preparing Morning Digest...")
     try:
         url = f"https://api.open-meteo.com/v1/forecast?latitude={DNIPRO_LAT}&longitude={DNIPRO_LON}&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max&timezone=Europe%2FKyiv"
-        w = requests.get(url).json().get('daily', {})
+        w = requests.get(url, timeout=10).json().get('daily', {})
         t_min, t_max = w['temperature_2m_min'][0], w['temperature_2m_max'][0]
         rain = w['precipitation_probability_max'][0]
         
@@ -109,17 +126,18 @@ async def send_morning_digest():
         
         msg = f"☀️ **ДОБРОГО РАНКУ, ДНІПРО!**\n\n{w_text}\n\n📢 **Статус:** {status}\n\n💬 _{quote}_"
         await send_safe(msg, URL_MORNING)
-    except Exception as e: print(f"Morning Error: {e}")
+    except Exception as e: logger.error(f"Morning Error: {e}")
 
 async def send_evening_digest():
+    logger.info("Preparing Evening Digest...")
     try:
         url = f"https://api.open-meteo.com/v1/forecast?latitude={DNIPRO_LAT}&longitude={DNIPRO_LON}&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max&timezone=Europe%2FKyiv"
-        w = requests.get(url).json().get('daily', {})
+        w = requests.get(url, timeout=10).json().get('daily', {})
         t_min, t_max = w['temperature_2m_min'][1], w['temperature_2m_max'][1]
         
         msg = f"🌒 **НА ДОБРАНІЧ, ДНІПРО!**\n\n🌡 **Погода на завтра:** {t_min}°C ... {t_max}°C\n\n🔋 Не забудьте перевірити заряд гаджетів."
         await send_safe(msg, URL_EVENING)
-    except Exception as e: print(f"Evening Error: {e}")
+    except Exception as e: logger.error(f"Evening Error: {e}")
 
 # === ТАЙМЕРИ ===
 async def morning_loop():
@@ -160,7 +178,7 @@ def ask_gemini(photo_path):
     try:
         with open(photo_path, "rb") as f: img = base64.b64encode(f.read()).decode("utf-8")
         payload = {"contents": [{"parts": [{"text": "Extract schedule. JSON: [{\"group\": \"1.1\", \"start\": \"HH:MM\", \"end\": \"HH:MM\"}]"}, {"inline_data": {"mime_type": "image/jpeg", "data": img}}]}]}
-        r = requests.post(url, json=payload, headers={'Content-Type': 'application/json'})
+        r = requests.post(url, json=payload, headers={'Content-Type': 'application/json'}, timeout=15)
         return json.loads(r.json()['candidates'][0]['content']['parts'][0]['text'].replace('```json', '').replace('```', '').strip())
     except: return []
 
@@ -172,14 +190,21 @@ async def handler(event):
     chat_id = event.chat_id
     global IS_ALARM_ACTIVE
 
-    # === РУЧНІ ТЕСТИ (ДЛЯ ПЕРЕВІРКИ) ===
+    # === Ping ===
+    if event.out and "/ping" in text:
+        await event.respond("✅ **PONG!** Я в мережі.")
+        return
+
+    # === РУЧНІ ТЕСТИ ===
     if event.out and "test_morning" in text:
-        await event.respond("🌅 Тестую ранок...")
+        logger.info("Manual test: Morning")
+        await event.respond("⏳ Обробляю ранок...")
         await send_morning_digest()
         return
 
     if event.out and "test_evening" in text:
-        await event.respond("🌙 Тестую вечір...")
+        logger.info("Manual test: Evening")
+        await event.respond("⏳ Обробляю вечір...")
         await send_evening_digest()
         return
 
