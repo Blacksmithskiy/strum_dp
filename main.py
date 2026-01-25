@@ -6,7 +6,7 @@ import re
 import requests
 import asyncio
 import random
-import io  # <--- Добавлено для правильной обработки фото
+import io
 from datetime import datetime, timedelta
 from dateutil import parser
 from telethon import TelegramClient, events
@@ -40,19 +40,21 @@ URL_EXTRA_STOP = "https://arcanavisio.com/wp-content/uploads/2026/01/06_EXTRA_ST
 URL_TREVOGA = "https://arcanavisio.com/wp-content/uploads/2026/01/07_TREVOGA.jpg"
 URL_TREVOGA_STOP = "https://arcanavisio.com/wp-content/uploads/2026/01/08_TREVOGA_STOP.jpg"
 
-# === ТЕКСТИ ===
-TXT_TREVOGA = "⚠️❗️ **УВАГА! ОГОЛОШЕНО ПОВІТРЯННУ ТРИВОГУ.**\n🏃 **ВСІМ ПРОЙТИ В УКРИТТЯ.**"
+# === ТЕКСТИ (З ВІДСТУПАМИ) ===
+TXT_TREVOGA = "⚠️❗️ **УВАГА! ОГОЛОШЕНО ПОВІТРЯННУ ТРИВОГУ.**\n\n🏃 **ВСІМ ПРОЙТИ В УКРИТТЯ.**"
 TXT_TREVOGA_STOP = "✅ **ВІДБІЙ ПОВІТРЯННОЇ ТРИВОГИ.**"
-TXT_EXTRA_START = "⚡❗️**УВАГА! ЗАСТОСОВАНІ ЕКСТРЕНІ ВІДКЛЮЧЕННЯ.**\n**ПІД ЧАС ЕКСТРЕНИХ ВІДКЛЮЧЕНЬ ГРАФІКИ НЕ ДІЮТЬ.**"
+TXT_EXTRA_START = "⚡❗️**УВАГА! ЗАСТОСОВАНІ ЕКСТРЕНІ ВІДКЛЮЧЕННЯ.**\n\n**ПІД ЧАС ЕКСТРЕНИХ ВІДКЛЮЧЕНЬ ГРАФІКИ НЕ ДІЮТЬ.**"
 TXT_EXTRA_STOP = "⚡️✔️ **ЕКСТРЕНІ ВІДКЛЮЧЕННЯ СВІТЛА СКАСОВАНІ.**"
 
 FOOTER = """
 ___
 
 ⭐️ Підписуйтесь та поділіться з родичами і друзями:
+
 ⚡СТРУМ ДНІПРА https://t.me/strum_dp
 
 ❤️ ПІДТРИМКА СЕРВІСУ:
+
 🔗 https://send.monobank.ua/jar/9gBQ4LTLUa
 ___
 
@@ -85,14 +87,10 @@ async def get_tasks_service():
 # === БЕЗПЕЧНА ВІДПРАВКА (ЯК ФОТО) ===
 async def send_safe(text, img_url):
     try:
-        # 1. Скачуємо
         response = await asyncio.to_thread(requests.get, img_url)
         if response.status_code == 200:
-            # 2. Перетворюємо в "віртуальний файл" з розширенням .jpg
-            # Це змушує Телеграм думати, що ми відправляємо фото, а не документ
             photo_file = io.BytesIO(response.content)
-            photo_file.name = "image.jpg" 
-            
+            photo_file.name = "image.jpg"
             await client.send_message(CHANNEL_USERNAME, text + FOOTER, file=photo_file)
         else:
             await client.send_message(CHANNEL_USERNAME, text + FOOTER)
@@ -240,11 +238,9 @@ async def handler(event):
                 if prev_grp and main_grp != prev_grp: msg_lines.append("➖➖➖➖➖➖➖➖")
                 prev_grp = main_grp
                 
-                # --- ВИДІЛЕННЯ ГРУПИ 1.1 ---
+                # Компактне виділення 1.1
                 if grp == MY_PERSONAL_GROUP:
-                    msg_lines.append("🔸🔸🔸🔸🔸🔸")
-                    msg_lines.append(f"🏠 **Гр. {grp}:** {start.strftime('%H:%M')} - {end.strftime('%H:%M')}")
-                    msg_lines.append("🔸🔸🔸🔸🔸🔸")
+                    msg_lines.append(f"👉 🏠 **Гр. {grp}:** {start.strftime('%H:%M')} - {end.strftime('%H:%M')} 👈")
                 else:
                     msg_lines.append(f"🔹 **Гр. {grp}:** {start.strftime('%H:%M')} - {end.strftime('%H:%M')}")
                 
