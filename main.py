@@ -9,7 +9,7 @@ import random
 import io
 import logging
 from datetime import datetime, timedelta
-from dateutil import parser
+from zoneinfo import ZoneInfo
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
 from telethon.tl.functions.channels import JoinChannelRequest
@@ -35,7 +35,7 @@ SESSION_STRING = os.environ['TELEGRAM_SESSION']
 GEMINI_KEY = os.environ['GEMINI_API_KEY']
 GOOGLE_TOKEN = os.environ['GOOGLE_TOKEN_JSON']
 
-# === МЕДІА ===
+# === МЕДІА (ПОСИЛАННЯ) ===
 URL_MORNING = "https://arcanavisio.com/wp-content/uploads/2026/01/01_MORNING.jpg"
 URL_EVENING = "https://arcanavisio.com/wp-content/uploads/2026/01/02_EVENING.jpg"
 URL_GRAFIC = "https://arcanavisio.com/wp-content/uploads/2026/01/03_GRAFIC.jpg"
@@ -45,23 +45,26 @@ URL_EXTRA_STOP = "https://arcanavisio.com/wp-content/uploads/2026/01/06_EXTRA_ST
 URL_TREVOGA = "https://arcanavisio.com/wp-content/uploads/2026/01/07_TREVOGA.jpg"
 URL_TREVOGA_STOP = "https://arcanavisio.com/wp-content/uploads/2026/01/08_TREVOGA_STOP.jpg"
 
-# === ТЕКСТИ ===
-TXT_TREVOGA = "⚠️❗️ **УВАГА! ОГОЛОШЕНО ПОВІТРЯННУ ТРИВОГУ.**\n\n🏃 **ВСІМ ПРОЙТИ В УКРИТТЯ.**"
-TXT_TREVOGA_STOP = "✅ **ВІДБІЙ ПОВІТРЯННОЇ ТРИВОГИ.**"
+# === ТЕКСТИ (ОРФОГРАФІЯ ВИПРАВЛЕНА) ===
+TXT_TREVOGA = "⚠️❗️ **УВАГА! ОГОЛОШЕНО ПОВІТРЯНУ ТРИВОГУ.**\n\n🏃 **ВСІМ ПРОЙТИ В УКРИТТЯ.**"
+TXT_TREVOGA_STOP = "✅ **ВІДБІЙ ПОВІТРЯНОЇ ТРИВОГИ.**"
 TXT_EXTRA_START = "⚡❗️**УВАГА! ЗАСТОСОВАНІ ЕКСТРЕНІ ВІДКЛЮЧЕННЯ.**\n\n**ПІД ЧАС ЕКСТРЕНИХ ВІДКЛЮЧЕНЬ ГРАФІКИ НЕ ДІЮТЬ.**"
 TXT_EXTRA_STOP = "⚡️✔️ **ЕКСТРЕНІ ВІДКЛЮЧЕННЯ СВІТЛА СКАСОВАНІ.**"
 
+# === ФУТЕР ===
 FOOTER = """
-______
+____
 
-⭐️ Підписуйтесь та поділіться з родичами і друзями: ⚡️СТРУМ ДНІПРА https://t.me/strum_dp
+⭐️Підписуйтесь та поділіться з друзями: 
+⚡️СТРУМ ДНІПРА https://t.me/strum_dp
 
-❤️ ПІДТРИМКА СЕРВІСУ: 🔗 https://send.monobank.ua/jar/9gBQ4LTLUa
-______
+❤️ПІДТРИМКА СЕРВІСУ: 
+https://send.monobank.ua/jar/9gBQ4LTLUa
+____
 
-@strum_dp"""
+⚡️ @strum_dp"""
 
-# === ЗАПАСНІ СПИСКИ (Якщо AI мовчить) ===
+# === ЗАПАСНІ ЦИТАТИ (РЕЗЕРВ) ===
 BACKUP_MORNING = [
     "Той, хто має «Навіщо» жити, витримає майже будь-яке «Як».",
     "Ми робимо себе або сильними, або нещасними. Кількість зусиль однакова.",
@@ -73,7 +76,7 @@ BACKUP_MORNING = [
 
 BACKUP_EVENING = [
     "День завершено. Відпусти турботи, як дерево скидає сухе листя.",
-    "Сон — це найкраща медитація. (Далай-лама)",
+    "Сон — це найкраща медитація.",
     "Навіть найтемніша ніч закінчується світанком. Відпочивай.",
     "Завтра буде новий день і нові сили. Сьогодні — тиша.",
     "Мир всередині починається тоді, коли ти перестаєш контролювати все ззовні.",
@@ -90,28 +93,16 @@ async def get_tasks_service():
     creds = Credentials.from_authorized_user_info(creds_dict)
     return build('tasks', 'v1', credentials=creds)
 
-# === ГЕНЕРАТОР ДУМОК (AI) ===
+# === AI ГЕНЕРАТОР ЦИТАТ ===
 def get_ai_quote(mode="morning"):
-    """
-    mode="morning" -> Сила, дія, стоїцизм.
-    mode="evening" -> Спокій, рефлексія, відновлення.
-    """
     logger.info(f"Generating AI quote for: {mode}")
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key={GEMINI_KEY}"
     
     if mode == "morning":
-        prompt = """
-        Напиши одну коротку, глибоку та підтримуючу думку для українців на ранок.
-        Теми: внутрішня сила, дія, стоїцизм, віра в себе (Юнг, Франкл, Марк Аврелій).
-        Вимоги: Без банальностей. До 15 слів. Українська мова. Без лапок.
-        """
+        prompt = "Напиши одну коротку, глибоку та підтримуючу думку для українців на ранок. Теми: внутрішня сила, дія, стоїцизм. Українська. Без банальностей. До 15 слів. Без лапок."
         backup_list = BACKUP_MORNING
     else:
-        prompt = """
-        Напиши одну коротку, глибоку та заспокійливу думку для українців на вечір перед сном.
-        Теми: відпускання дня, спокій, тиша, відновлення, надія на завтра, мудрість ночі.
-        Вимоги: М'який тон. До 15 слів. Українська мова. Без лапок.
-        """
+        prompt = "Напиши одну коротку, глибоку та заспокійливу думку для українців на вечір. Теми: спокій, надія, відновлення, подяка. Українська. М'який тон. До 15 слів. Без лапок."
         backup_list = BACKUP_EVENING
     
     payload = {"contents": [{"parts": [{"text": prompt}]}]}
@@ -120,34 +111,36 @@ def get_ai_quote(mode="morning"):
         if r.status_code == 200:
             text = r.json()['candidates'][0]['content']['parts'][0]['text'].strip()
             text = text.replace('"', '').replace('*', '')
-            logger.info(f"AI Quote ({mode}): {text}")
             return text
     except Exception as e:
-        logger.error(f"Quote generation failed: {e}")
+        logger.error(f"AI Quote Error: {e}")
     
     return random.choice(backup_list)
 
-# === ПОГОДА ===
-def get_weather(is_tomorrow=False):
+# === ПОГОДА (З Retry) ===
+def get_weather():
     url = f"https://api.open-meteo.com/v1/forecast?latitude={DNIPRO_LAT}&longitude={DNIPRO_LON}&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max&current=temperature_2m,wind_speed_10m&timezone=Europe%2FKyiv"
-    for attempt in range(3):
+    for _ in range(3):
         try:
             r = requests.get(url, headers=HEADERS, timeout=20)
             if r.status_code == 200: return r.json()
         except: time.sleep(2)
     return None
 
-# === ВІДПРАВКА ===
+# === БЕЗПЕЧНА ВІДПРАВКА ===
 async def send_safe(text, img_url):
     try:
+        # Скачуємо картинку, щоб уникнути помилок Telegram
         response = await asyncio.to_thread(requests.get, img_url, headers=HEADERS, timeout=15)
         if response.status_code == 200:
             photo_file = io.BytesIO(response.content)
-            photo_file.name = "image.jpg"
+            photo_file.name = "image.jpg" # Маскуємо під файл фото
             await client.send_message(CHANNEL_USERNAME, text + FOOTER, file=photo_file)
         else:
+            # Якщо картинка не доступна - шлемо текст
             await client.send_message(CHANNEL_USERNAME, text + FOOTER)
-    except: 
+    except Exception as e: 
+        logger.error(f"Send Error: {e}")
         try: await client.send_message(CHANNEL_USERNAME, text + FOOTER)
         except: pass
 
@@ -166,10 +159,9 @@ async def send_morning_digest():
 
     status = "🔴 Тривога активна!" if IS_ALARM_ACTIVE else "🟢 Небо чисте."
     
-    # AI РАНОК
     quote = await asyncio.to_thread(get_ai_quote, "morning")
     
-    msg = f"☀️ **ДОБРОГО РАНКУ, ДНІПРО!**\n\n{w_text}\n\n📢 **Статус:** {status}\n\n💬 _{quote}_"
+    msg = f"☀️ **ДОБРОГО РАНКУ, ДНІПРО!**\n\n{w_text}\n\n📢 **Статус:** {status}\n\n> {quote}"
     await send_safe(msg, URL_MORNING)
 
 async def send_evening_digest():
@@ -177,16 +169,15 @@ async def send_evening_digest():
     data = await asyncio.to_thread(get_weather)
 
     if data:
-        t_min = data['daily']['temperature_2m_min'][1] # Завтра
+        t_min = data['daily']['temperature_2m_min'][1] # Прогноз на завтра
         t_max = data['daily']['temperature_2m_max'][1]
         w_text = f"🌡 **Погода на завтра:** {t_min}°C ... {t_max}°C"
     else:
         w_text = "🌡 **Погода на завтра:** Дані оновлюються."
 
-    # AI ВЕЧІР
     quote = await asyncio.to_thread(get_ai_quote, "evening")
 
-    msg = f"🌒 **НА ДОБРАНІЧ, ДНІПРО!**\n\n{w_text}\n\n💬 _{quote}_\n\n🔋 Не забудьте перевірити заряд гаджетів."
+    msg = f"🌒 **НА ДОБРАНІЧ, ДНІПРО!**\n\n{w_text}\n\n> {quote}\n\n🔋 Не забудьте перевірити заряд гаджетів."
     await send_safe(msg, URL_EVENING)
 
 # === МОНІТОР АЛЕРТІВ ===
@@ -213,31 +204,43 @@ async def check_weather_alerts(test_mode=False):
     elif alerts:
         await client.send_message(CHANNEL_USERNAME, "\n".join(alerts) + FOOTER)
 
-# === ТАЙМЕРИ ===
+# === ТАЙМЕРИ (За Київським часом) ===
 async def morning_loop():
+    logger.info("Starting Morning Loop (Kyiv Time)")
     while True:
-        now = datetime.now()
-        target = now.replace(hour5, minute=0, second=0, microsecond=0)
+        now = datetime.now(ZoneInfo("Europe/Kyiv"))
+        target = now.replace(hour=8, minute=0, second=0, microsecond=0)
+        
         if now >= target: target += timedelta(days=1)
-        await asyncio.sleep((target - now).total_seconds())
+        
+        wait_seconds = (target - now).total_seconds()
+        logger.info(f"Morning Post scheduled in: {wait_seconds}s")
+        
+        await asyncio.sleep(wait_seconds)
         await send_morning_digest()
         await asyncio.sleep(60)
 
 async def evening_loop():
+    logger.info("Starting Evening Loop (Kyiv Time)")
     while True:
-        now = datetime.now()
-        target = now.replace(hour=20, minute=0, second=0, microsecond=0)
+        now = datetime.now(ZoneInfo("Europe/Kyiv"))
+        target = now.replace(hour=22, minute=0, second=0, microsecond=0)
+        
         if now >= target: target += timedelta(days=1)
-        await asyncio.sleep((target - now).total_seconds())
+        
+        wait_seconds = (target - now).total_seconds()
+        logger.info(f"Evening Post scheduled in: {wait_seconds}s")
+        
+        await asyncio.sleep(wait_seconds)
         await send_evening_digest()
         await asyncio.sleep(60)
 
 async def weather_loop():
     while True:
         await check_weather_alerts(test_mode=False)
-        await asyncio.sleep(1800) 
+        await asyncio.sleep(1800) # Перевірка кожні 30 хв
 
-# === ПАРСЕР ТА AI ДЛЯ ГРАФІКІВ ===
+# === ПАРСЕР ГРАФІКІВ ===
 def parse_schedule(text):
     schedule = []
     for line in text.split('\n'):
@@ -269,7 +272,7 @@ async def handler(event):
     chat_id = event.chat_id
     global IS_ALARM_ACTIVE
 
-    # === ТЕСТИ ===
+    # === РУЧНІ ТЕСТИ ===
     if event.out:
         if "test_morning" in text:
             await event.respond("🌅 Тестую ранок...")
@@ -287,7 +290,9 @@ async def handler(event):
     # === СИРЕНА ===
     is_siren = False
     if REAL_SIREN_ID and chat_id == REAL_SIREN_ID: is_siren = True
-    if (getattr(event.chat, 'username', '') or '').lower() == SIREN_CHANNEL_USER: is_siren = True
+    username = (getattr(event.chat, 'username', '') or '').lower()
+    if username == SIREN_CHANNEL_USER: is_siren = True
+    
     if "test_siren" in text and event.out: is_siren = True
     if event.fwd_from and ("сирена" in text or "тривог" in text): is_siren = True
 
@@ -350,11 +355,13 @@ async def handler(event):
                 if prev_grp and main_grp != prev_grp: msg_lines.append("➖➖➖➖➖➖➖➖")
                 prev_grp = main_grp
                 
+                # Особливе виділення групи 1.1
                 if grp == MY_PERSONAL_GROUP:
                     msg_lines.append(f"👉 🏠 **Гр. {grp}:** {start.strftime('%H:%M')} - {end.strftime('%H:%M')} 👈")
                 else:
                     msg_lines.append(f"🔹 **Гр. {grp}:** {start.strftime('%H:%M')} - {end.strftime('%H:%M')}")
                 
+                # Google Tasks (Тільки для 1.1)
                 if grp == MY_PERSONAL_GROUP:
                     notif = start - timedelta(hours=2, minutes=10)
                     task = {'title': f"💡 СВІТЛО (Гр. {grp})", 'notes': f"{start.strftime('%H:%M')}-{end.strftime('%H:%M')}", 'due': notif.isoformat() + 'Z'}
@@ -381,4 +388,3 @@ if __name__ == '__main__':
     client.loop.create_task(weather_loop())
     client.loop.run_until_complete(startup())
     client.run_until_disconnected()
-
