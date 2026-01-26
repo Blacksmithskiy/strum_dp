@@ -45,7 +45,7 @@ SESSION_STRING = os.environ['TELEGRAM_SESSION']
 GEMINI_KEY = os.environ['GEMINI_API_KEY']
 GOOGLE_TOKEN = os.environ['GOOGLE_TOKEN_JSON']
 
-# === МЕДІА (ПОСИЛАННЯ) ===
+# === МЕДІА ===
 URL_MORNING = "https://arcanavisio.com/wp-content/uploads/2026/01/01_MORNING.jpg"
 URL_EVENING = "https://arcanavisio.com/wp-content/uploads/2026/01/02_EVENING.jpg"
 URL_GRAFIC = "https://arcanavisio.com/wp-content/uploads/2026/01/03_GRAFIC.jpg"
@@ -55,21 +55,21 @@ URL_EXTRA_STOP = "https://arcanavisio.com/wp-content/uploads/2026/01/06_EXTRA_ST
 URL_TREVOGA = "https://arcanavisio.com/wp-content/uploads/2026/01/07_TREVOGA.jpg"
 URL_TREVOGA_STOP = "https://arcanavisio.com/wp-content/uploads/2026/01/08_TREVOGA_STOP.jpg"
 
-# === ТЕКСТИ ===
-TXT_TREVOGA = "⚠️❗️ **УВАГА! ОГОЛОШЕНО ПОВІТРЯНУ ТРИВОГУ.**\n\n🏃 **ВСІМ ПРОЙТИ В УКРИТТЯ.**"
-TXT_TREVOGA_STOP = "✅ **ВІДБІЙ ПОВІТРЯНОЇ ТРИВОГИ.**"
-TXT_EXTRA_START = "⚡❗️**УВАГА! ЗАСТОСОВАНІ ЕКСТРЕНІ ВІДКЛЮЧЕННЯ.**\n\n**ПІД ЧАС ЕКСТРЕНИХ ВІДКЛЮЧЕНЬ ГРАФІКИ НЕ ДІЮТЬ.**"
-TXT_EXTRA_STOP = "⚡️✔️ **ЕКСТРЕНІ ВІДКЛЮЧЕННЯ СВІТЛА СКАСОВАНІ.**"
+# === ТЕКСТИ (HTML) ===
+TXT_TREVOGA = "<b>⚠️❗️ УВАГА! ОГОЛОШЕНО ПОВІТРЯНУ ТРИВОГУ.</b>\n\n🏃 <b>ВСІМ ПРОЙТИ В УКРИТТЯ.</b>"
+TXT_TREVOGA_STOP = "<b>✅ ВІДБІЙ ПОВІТРЯНОЇ ТРИВОГИ.</b>"
+TXT_EXTRA_START = "<b>⚡❗️УВАГА! ЗАСТОСОВАНІ ЕКСТРЕНІ ВІДКЛЮЧЕННЯ.</b>\n\n<b>ПІД ЧАС ЕКСТРЕНИХ ВІДКЛЮЧЕНЬ ГРАФІКИ НЕ ДІЮТЬ.</b>"
+TXT_EXTRA_STOP = "<b>⚡️✔️ ЕКСТРЕНІ ВІДКЛЮЧЕННЯ СВІТЛА СКАСОВАНІ.</b>"
 
-# === ФУТЕР ===
+# === ФУТЕР (HTML) ===
 FOOTER = """
 ____
 
 ⭐️Підписуйтесь та поділіться з друзями: 
-⚡️СТРУМ ДНІПРА https://t.me/strum_dp
+⚡️СТРУМ ДНІПРА <a href="https://t.me/strum_dp">https://t.me/strum_dp</a>
 
 ❤️ПІДТРИМКА СЕРВІСУ: 
-https://send.monobank.ua/jar/9gBQ4LTLUa
+<a href="https://send.monobank.ua/jar/9gBQ4LTLUa">https://send.monobank.ua/jar/9gBQ4LTLUa</a>
 ____
 
 ⚡️ @strum_dp"""
@@ -103,7 +103,7 @@ async def get_tasks_service():
     creds = Credentials.from_authorized_user_info(creds_dict)
     return build('tasks', 'v1', credentials=creds)
 
-# === AI ГЕНЕРАТОР ЦИТАТ ===
+# === AI ГЕНЕРАТОР ===
 def get_ai_quote(mode="morning"):
     logger.info(f"Generating AI quote for: {mode}")
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key={GEMINI_KEY}"
@@ -137,19 +137,20 @@ def get_weather():
         except: time.sleep(2)
     return None
 
-# === ВІДПРАВКА ===
+# === ВІДПРАВКА (HTML) ===
 async def send_safe(text, img_url):
     try:
         response = await asyncio.to_thread(requests.get, img_url, headers=HEADERS, timeout=15)
         if response.status_code == 200:
             photo_file = io.BytesIO(response.content)
             photo_file.name = "image.jpg"
-            await client.send_message(CHANNEL_USERNAME, text + FOOTER, file=photo_file)
+            # parse_mode='html' - ВАЖЛИВО для цитат і жирного тексту
+            await client.send_message(CHANNEL_USERNAME, text + FOOTER, file=photo_file, parse_mode='html')
         else:
-            await client.send_message(CHANNEL_USERNAME, text + FOOTER)
+            await client.send_message(CHANNEL_USERNAME, text + FOOTER, parse_mode='html')
     except Exception as e: 
         logger.error(f"Send Error: {e}")
-        try: await client.send_message(CHANNEL_USERNAME, text + FOOTER)
+        try: await client.send_message(CHANNEL_USERNAME, text + FOOTER, parse_mode='html')
         except: pass
 
 # === ДАЙДЖЕСТИ ===
@@ -161,15 +162,16 @@ async def send_morning_digest():
         t_min = data['daily']['temperature_2m_min'][0]
         t_max = data['daily']['temperature_2m_max'][0]
         rain = data['daily']['precipitation_probability_max'][0]
-        w_text = f"🌡 **Температура:** {t_min}°C ... {t_max}°C\n☔️ **Опади:** {'Можливі' if rain > 50 else 'Малоймовірні'} ({rain}%)"
+        w_text = f"🌡 <b>Температура:</b> {t_min}°C ... {t_max}°C\n☔️ <b>Опади:</b> {'Можливі' if rain > 50 else 'Малоймовірні'} ({rain}%)"
     else:
-        w_text = "🌡 **Погода:** Тимчасово недоступна."
+        w_text = "🌡 <b>Погода:</b> Тимчасово недоступна."
 
     status = "🔴 Тривога активна!" if IS_ALARM_ACTIVE else "🟢 Небо чисте."
     
     quote = await asyncio.to_thread(get_ai_quote, "morning")
     
-    msg = f"☀️ **ДОБРОГО РАНКУ, ДНІПРО!**\n\n{w_text}\n\n📢 **Статус:** {status}\n\n> {quote}"
+    # Використовуємо <blockquote> для цитати
+    msg = f"<b>☀️ ДОБРОГО РАНКУ, ДНІПРО!</b>\n\n{w_text}\n\n📢 <b>Статус повітряної тривоги:</b> {status}\n\n<blockquote>{quote}</blockquote>"
     await send_safe(msg, URL_MORNING)
 
 async def send_evening_digest():
@@ -177,15 +179,15 @@ async def send_evening_digest():
     data = await asyncio.to_thread(get_weather)
 
     if data:
-        t_min = data['daily']['temperature_2m_min'][1] # Завтра
+        t_min = data['daily']['temperature_2m_min'][1]
         t_max = data['daily']['temperature_2m_max'][1]
-        w_text = f"🌡 **Погода на завтра:** {t_min}°C ... {t_max}°C"
+        w_text = f"🌡 <b>Погода на завтра:</b> {t_min}°C ... {t_max}°C"
     else:
-        w_text = "🌡 **Погода на завтра:** Дані оновлюються."
+        w_text = "🌡 <b>Погода на завтра:</b> Дані оновлюються."
 
     quote = await asyncio.to_thread(get_ai_quote, "evening")
 
-    msg = f"🌒 **НА ДОБРАНІЧ, ДНІПРО!**\n\n{w_text}\n\n> {quote}\n\n🔋 Не забудьте перевірити заряд гаджетів."
+    msg = f"<b>🌒 НА ДОБРАНІЧ, ДНІПРО!</b>\n\n{w_text}\n\n<blockquote>{quote}</blockquote>\n\n🔋 Не забудьте перевірити заряд гаджетів."
     await send_safe(msg, URL_EVENING)
 
 # === МОНІТОР АЛЕРТІВ ===
@@ -200,17 +202,17 @@ async def check_weather_alerts(test_mode=False):
     wind = curr.get('wind_speed_10m', 0)
     
     alerts = []
-    if temp < -10: alerts.append(f"🥶 **СИЛЬНИЙ МОРОЗ: {temp}°C!**")
-    if temp > 30: alerts.append(f"🥵 **СИЛЬНА СПЕКА: {temp}°C!**")
-    if wind > 15: alerts.append(f"💨 **ШТОРМОВИЙ ВІТЕР: {wind} м/с!**")
+    if temp < -10: alerts.append(f"🥶 <b>СИЛЬНИЙ МОРОЗ: {temp}°C!</b>")
+    if temp > 30: alerts.append(f"🥵 <b>СИЛЬНА СПЕКА: {temp}°C!</b>")
+    if wind > 15: alerts.append(f"💨 <b>ШТОРМОВИЙ ВІТЕР: {wind} м/с!</b>")
     
     if test_mode:
-        test_msg = f"🧪 **ТЕСТ ПОГОДИ:**\n🌡 Температура: {temp}°C\n💨 Вітер: {wind} м/с"
-        if alerts: test_msg += "\n\n⚠️ **АЛЕРТИ:**\n" + "\n".join(alerts)
+        test_msg = f"🧪 <b>ТЕСТ ПОГОДИ:</b>\n🌡 Температура: {temp}°C\n💨 Вітер: {wind} м/с"
+        if alerts: test_msg += "\n\n⚠️ <b>АЛЕРТИ:</b>\n" + "\n".join(alerts)
         else: test_msg += "\n\n✅ Алертів немає."
-        await client.send_message(CHANNEL_USERNAME, test_msg)
+        await client.send_message(CHANNEL_USERNAME, test_msg, parse_mode='html')
     elif alerts:
-        await client.send_message(CHANNEL_USERNAME, "\n".join(alerts) + FOOTER)
+        await client.send_message(CHANNEL_USERNAME, "\n".join(alerts) + FOOTER, parse_mode='html')
 
 # === ТАЙМЕРИ (КИЇВ) ===
 async def morning_loop():
@@ -218,7 +220,6 @@ async def morning_loop():
     while True:
         now = datetime.now(ZoneInfo("Europe/Kyiv"))
         target = now.replace(hour=8, minute=0, second=0, microsecond=0)
-        
         if now >= target: target += timedelta(days=1)
         
         wait_seconds = (target - now).total_seconds()
@@ -233,7 +234,6 @@ async def evening_loop():
     while True:
         now = datetime.now(ZoneInfo("Europe/Kyiv"))
         target = now.replace(hour=22, minute=0, second=0, microsecond=0)
-        
         if now >= target: target += timedelta(days=1)
         
         wait_seconds = (target - now).total_seconds()
@@ -246,7 +246,7 @@ async def evening_loop():
 async def weather_loop():
     while True:
         await check_weather_alerts(test_mode=False)
-        await asyncio.sleep(1800) 
+        await asyncio.sleep(1800)
 
 # === ПАРСЕР ГРАФІКІВ ===
 def parse_schedule(text):
@@ -264,16 +264,18 @@ def parse_schedule(text):
     return schedule
 
 def ask_gemini_schedule(photo_path):
-    # Промпт змінено: СУВОРА вимога тільки валідних груп
+    # Промпт: Просимо AI знайти графік, але фінальну фільтрацію робимо в Python
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key={GEMINI_KEY}"
     try:
         with open(photo_path, "rb") as f: img = base64.b64encode(f.read()).decode("utf-8")
-        prompt_text = "Extract DTEK schedule. ONLY valid groups: 1.1, 1.2, 2.1, 2.2, 3.1, 3.2, 4.1, 4.2, 5.1, 5.2, 6.1, 6.2. Ignore any others (like 0.5, 7.5). JSON: [{\"group\": \"1.1\", \"start\": \"HH:MM\", \"end\": \"HH:MM\"}]"
+        prompt_text = "Extract schedule. JSON: [{\"group\": \"1.1\", \"start\": \"HH:MM\", \"end\": \"HH:MM\"}]"
         
         payload = {"contents": [{"parts": [{"text": prompt_text}, {"inline_data": {"mime_type": "image/jpeg", "data": img}}]}]}
         r = requests.post(url, json=payload, headers={'Content-Type': 'application/json'}, timeout=15)
         return json.loads(r.json()['candidates'][0]['content']['parts'][0]['text'].replace('```json', '').replace('```', '').strip())
-    except: return []
+    except Exception as e:
+        logger.error(f"Gemini Error: {e}")
+        return []
 
 client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
 
@@ -329,15 +331,26 @@ async def handler(event):
 
     # === ГРАФІКИ ===
     schedule = []
+    
+    # Сценарій 1: Текст
     if re.search(r'\d\.\d', text) and re.search(r'\d{1,2}:\d{2}', text):
         schedule = parse_schedule(event.message.message)
+    
+    # Сценарій 2: Фото (Додано індикатор обробки)
     elif event.message.photo:
-        async with processing_lock:
-            try:
-                path = await event.message.download_media()
-                schedule = await asyncio.to_thread(ask_gemini_schedule, path)
-                os.remove(path)
-            except: pass
+        # Перевіряємо, чи це повідомлення від адміна (щоб не реагувати на всі картинки в групах)
+        # Якщо бот приватний, він реагує на все. Якщо в групі - краще додати перевірку event.out
+        if event.out or event.is_private:
+            async with processing_lock:
+                status_msg = await event.respond("🛡 Аналізую графік...")
+                try:
+                    path = await event.message.download_media()
+                    schedule = await asyncio.to_thread(ask_gemini_schedule, path)
+                    os.remove(path)
+                except Exception as e:
+                    logger.error(f"Graph Process Error: {e}")
+                finally:
+                    await client.delete_messages(event.chat_id, status_msg)
 
     if schedule and isinstance(schedule, list):
         service = await get_tasks_service()
@@ -347,34 +360,34 @@ async def handler(event):
         date_now = datetime.now().strftime('%d.%m.%Y')
         
         if is_update:
-            header = f"⚡️✔️ **ОНОВЛЕННЯ ГРАФІКІВ ВІДКЛЮЧЕНЬ СВІТЛА.**\n📅 **На {date_now}**"
+            header = f"<b>⚡️✔️ ОНОВЛЕННЯ ГРАФІКІВ ВІДКЛЮЧЕНЬ СВІТЛА.</b>\n📅 <b>На {date_now}</b>"
             img_url = URL_NEW_GRAFIC
         else:
-            header = f"⚡️📌 **ГРАФІКИ ВІДКЛЮЧЕНЬ СВІТЛА.**\n📅 **На {date_now}**"
+            header = f"<b>⚡️📌 ГРАФІКИ ВІДКЛЮЧЕНЬ СВІТЛА.</b>\n📅 <b>На {date_now}</b>"
             img_url = URL_GRAFIC
 
         msg_lines = [header, ""]
         prev_grp = None
+        has_valid_groups = False
         
         for entry in schedule:
             try:
                 start = parser.parse(entry['start'])
                 end = parser.parse(entry['end'])
-                grp = entry.get('group', '?')
+                grp = entry.get('group', '?').strip()
                 
-                # === ФІЛЬТР НЕІСНУЮЧИХ ГРУП ===
-                if grp not in VALID_GROUPS:
-                    logger.warning(f"Ignored invalid group: {grp}")
-                    continue
+                # Жорсткий фільтр
+                if grp not in VALID_GROUPS: continue
+                has_valid_groups = True
 
                 main_grp = grp.split('.')[0] if '.' in grp else grp
                 if prev_grp and main_grp != prev_grp: msg_lines.append("➖➖➖➖➖➖➖➖")
                 prev_grp = main_grp
                 
                 if grp == MY_PERSONAL_GROUP:
-                    msg_lines.append(f"👉 🏠 **Гр. {grp}:** {start.strftime('%H:%M')} - {end.strftime('%H:%M')} 👈")
+                    msg_lines.append(f"👉 🏠 <b>Гр. {grp}:</b> {start.strftime('%H:%M')} - {end.strftime('%H:%M')} 👈")
                 else:
-                    msg_lines.append(f"🔹 **Гр. {grp}:** {start.strftime('%H:%M')} - {end.strftime('%H:%M')}")
+                    msg_lines.append(f"🔹 <b>Гр. {grp}:</b> {start.strftime('%H:%M')} - {end.strftime('%H:%M')}")
                 
                 if grp == MY_PERSONAL_GROUP:
                     notif = start - timedelta(hours=2, minutes=10)
@@ -383,8 +396,11 @@ async def handler(event):
                     except: pass
             except: continue
         
-        if len(msg_lines) > 2:
+        if has_valid_groups:
             await send_safe("\n".join(msg_lines), img_url)
+        else:
+            # Якщо нічого не знайшли, але користувач чекав
+            logger.warning("No valid groups found in schedule")
 
 async def startup():
     global REAL_SIREN_ID
