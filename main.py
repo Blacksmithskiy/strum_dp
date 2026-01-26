@@ -56,7 +56,7 @@ ______
 
 ⭐️ Підписуйтесь та поділіться з родичами і друзями: ⚡️СТРУМ ДНІПРА https://t.me/strum_dp
 
-❤️ ПІДТРИМКА СЕРВІСУ: 🔗 https://send.monobank.ua/jar/9gBQ4LTLUa
+❤️ ПІДТРИМКА СЕРВІСУ: https://send.monobank.ua/jar/9gBQ4LTLUa
 ______
 
 @strum_dp"""
@@ -176,7 +176,7 @@ async def check_weather_alerts(test_mode=False):
 async def morning_loop():
     while True:
         now = datetime.now()
-        target = now.replace(hour=8, minute=0, second=0, microsecond=0)
+        target = now.replace(hour=5, minute=0, second=0, microsecond=0)
         if now >= target: target += timedelta(days=1)
         await asyncio.sleep((target - now).total_seconds())
         await send_morning_digest()
@@ -185,7 +185,7 @@ async def morning_loop():
 async def evening_loop():
     while True:
         now = datetime.now()
-        target = now.replace(hour=22, minute=0, second=0, microsecond=0)
+        target = now.replace(hour=19, minute=0, second=0, microsecond=0)
         if now >= target: target += timedelta(days=1)
         await asyncio.sleep((target - now).total_seconds())
         await send_evening_digest()
