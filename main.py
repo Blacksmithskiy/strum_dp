@@ -15,6 +15,7 @@ from telethon.sessions import StringSession
 from telethon.tl.functions.channels import JoinChannelRequest
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
+from dateutil import parser # Додано для парсингу часу
 
 # === ЛОГУВАННЯ ===
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
@@ -37,7 +38,7 @@ SESSION_STRING = os.environ['TELEGRAM_SESSION']
 GEMINI_KEY = os.environ['GEMINI_API_KEY']
 GOOGLE_TOKEN = os.environ['GOOGLE_TOKEN_JSON']
 
-# === МЕДІА (ПОВЕРНУЛИ ПОСИЛАННЯ - ЦЕ НАДІЙНІШЕ ДЛЯ TELETHON) ===
+# === МЕДІА (Стабільні посилання з захистом) ===
 URL_MORNING = "https://arcanavisio.com/wp-content/uploads/2026/01/01_MORNING.jpg"
 URL_EVENING = "https://arcanavisio.com/wp-content/uploads/2026/01/02_EVENING.jpg"
 URL_GRAFIC = "https://arcanavisio.com/wp-content/uploads/2026/01/03_GRAFIC.jpg"
@@ -105,15 +106,14 @@ def get_ai_quote(mode="morning"):
     except: pass
     return random.choice(BACKUP_MORNING if mode == "morning" else BACKUP_EVENING)
 
-# === ПОГОДА (З Retry) ===
+# === ПОГОДА ===
 def get_weather():
     url = f"https://api.open-meteo.com/v1/forecast?latitude={DNIPRO_LAT}&longitude={DNIPRO_LON}&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max&current=temperature_2m,wind_speed_10m&timezone=Europe%2FKyiv"
-    for i in range(3):
+    for _ in range(3):
         try:
             r = requests.get(url, headers=HEADERS, timeout=10)
             if r.status_code == 200: return r.json()
-        except: 
-            time.sleep(2)
+        except: time.sleep(2)
     return None
 
 # === ВІДПРАВКА (Захист від зависання) ===
@@ -200,14 +200,13 @@ async def schedule_loop():
         
         await asyncio.sleep(60)
 
-# === ПАРСЕР ===
+# === ПАРСЕР (З ВИПРАВЛЕННЯМ 24:00) ===
 def parse_schedule(text):
     schedule = []
     today = datetime.now().strftime('%Y-%m-%d')
     lines = text.split('\n')
     current_groups = []
     
-    # Регулярки для пошуку груп і часу
     group_pattern = r'\b([1-6]\.[1-2])\b'
     time_pattern = r'(\d{1,2}:\d{2})\s*[-–]\s*(\d{1,2}:\d{2})'
     
@@ -223,11 +222,19 @@ def parse_schedule(text):
             if times_in_line:
                 for grp in groups_in_line:
                     for t in times_in_line:
-                        schedule.append({"group": grp, "start": f"{today}T{t[0]}:00", "end": f"{today}T{t[1]}:00"})
+                        # ВИПРАВЛЕННЯ 24:00
+                        end_t = t[1]
+                        if end_t == "24:00": end_t = "23:59"
+                        
+                        schedule.append({"group": grp, "start": f"{today}T{t[0]}:00", "end": f"{today}T{end_t}:00"})
         elif times_in_line and current_groups:
             for grp in current_groups:
                 for t in times_in_line:
-                    schedule.append({"group": grp, "start": f"{today}T{t[0]}:00", "end": f"{today}T{t[1]}:00"})
+                    # ВИПРАВЛЕННЯ 24:00
+                    end_t = t[1]
+                    if end_t == "24:00": end_t = "23:59"
+                    
+                    schedule.append({"group": grp, "start": f"{today}T{t[0]}:00", "end": f"{today}T{end_t}:00"})
     return schedule
 
 def ask_gemini_schedule(photo_path):
@@ -244,7 +251,6 @@ client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
 
 @client.on(events.NewMessage())
 async def handler(event):
-    # === ФІКС "NoneType" (Критично важливо) ===
     try:
         chat = await event.get_chat()
         username = chat.username.lower() if chat and hasattr(chat, 'username') and chat.username else ""
@@ -295,7 +301,6 @@ async def handler(event):
     schedule = []
     # 1. Текст (Контекстний парсер)
     if re.search(r'[1-6]\.[1-2]', text) and re.search(r'\d{1,2}:\d{2}', text):
-        # Якщо бот бачить графік у своєму каналі (від адміна) або в приваті - парсимо
         if event.out or event.is_private:
              schedule = parse_schedule(event.message.message)
     
@@ -330,6 +335,10 @@ async def handler(event):
                 if grp not in VALID_GROUPS: continue 
                 
                 has_valid = True
+                # ВИПРАВЛЕННЯ 24:00 для AI парсера (на всяк випадок)
+                if entry['end'].endswith("T24:00:00"):
+                     entry['end'] = entry['end'].replace("T24:00:00", "T23:59:00")
+
                 start = parser.parse(entry['start'])
                 end = parser.parse(entry['end'])
                 
