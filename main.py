@@ -28,6 +28,16 @@ SIREN_CHANNEL_USER = "sirena_dp"
 DNIPRO_LAT = 48.46
 DNIPRO_LON = 35.04
 
+# === ВАЛІДНІ ГРУПИ (БІЛИЙ СПИСОК) ===
+VALID_GROUPS = [
+    "1.1", "1.2",
+    "2.1", "2.2",
+    "3.1", "3.2",
+    "4.1", "4.2",
+    "5.1", "5.2",
+    "6.1", "6.2"
+]
+
 # === ЗМІННІ ===
 API_ID = int(os.environ['API_ID'])
 API_HASH = os.environ['API_HASH']
@@ -45,7 +55,7 @@ URL_EXTRA_STOP = "https://arcanavisio.com/wp-content/uploads/2026/01/06_EXTRA_ST
 URL_TREVOGA = "https://arcanavisio.com/wp-content/uploads/2026/01/07_TREVOGA.jpg"
 URL_TREVOGA_STOP = "https://arcanavisio.com/wp-content/uploads/2026/01/08_TREVOGA_STOP.jpg"
 
-# === ТЕКСТИ (ОРФОГРАФІЯ ВИПРАВЛЕНА) ===
+# === ТЕКСТИ ===
 TXT_TREVOGA = "⚠️❗️ **УВАГА! ОГОЛОШЕНО ПОВІТРЯНУ ТРИВОГУ.**\n\n🏃 **ВСІМ ПРОЙТИ В УКРИТТЯ.**"
 TXT_TREVOGA_STOP = "✅ **ВІДБІЙ ПОВІТРЯНОЇ ТРИВОГИ.**"
 TXT_EXTRA_START = "⚡❗️**УВАГА! ЗАСТОСОВАНІ ЕКСТРЕНІ ВІДКЛЮЧЕННЯ.**\n\n**ПІД ЧАС ЕКСТРЕНИХ ВІДКЛЮЧЕНЬ ГРАФІКИ НЕ ДІЮТЬ.**"
@@ -64,7 +74,7 @@ ____
 
 ⚡️ @strum_dp"""
 
-# === ЗАПАСНІ ЦИТАТИ (РЕЗЕРВ) ===
+# === ЗАПАСНІ ЦИТАТИ ===
 BACKUP_MORNING = [
     "Той, хто має «Навіщо» жити, витримає майже будь-яке «Як».",
     "Ми робимо себе або сильними, або нещасними. Кількість зусиль однакова.",
@@ -117,7 +127,7 @@ def get_ai_quote(mode="morning"):
     
     return random.choice(backup_list)
 
-# === ПОГОДА (З Retry) ===
+# === ПОГОДА ===
 def get_weather():
     url = f"https://api.open-meteo.com/v1/forecast?latitude={DNIPRO_LAT}&longitude={DNIPRO_LON}&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max&current=temperature_2m,wind_speed_10m&timezone=Europe%2FKyiv"
     for _ in range(3):
@@ -127,17 +137,15 @@ def get_weather():
         except: time.sleep(2)
     return None
 
-# === БЕЗПЕЧНА ВІДПРАВКА ===
+# === ВІДПРАВКА ===
 async def send_safe(text, img_url):
     try:
-        # Скачуємо картинку, щоб уникнути помилок Telegram
         response = await asyncio.to_thread(requests.get, img_url, headers=HEADERS, timeout=15)
         if response.status_code == 200:
             photo_file = io.BytesIO(response.content)
-            photo_file.name = "image.jpg" # Маскуємо під файл фото
+            photo_file.name = "image.jpg"
             await client.send_message(CHANNEL_USERNAME, text + FOOTER, file=photo_file)
         else:
-            # Якщо картинка не доступна - шлемо текст
             await client.send_message(CHANNEL_USERNAME, text + FOOTER)
     except Exception as e: 
         logger.error(f"Send Error: {e}")
@@ -169,7 +177,7 @@ async def send_evening_digest():
     data = await asyncio.to_thread(get_weather)
 
     if data:
-        t_min = data['daily']['temperature_2m_min'][1] # Прогноз на завтра
+        t_min = data['daily']['temperature_2m_min'][1] # Завтра
         t_max = data['daily']['temperature_2m_max'][1]
         w_text = f"🌡 **Погода на завтра:** {t_min}°C ... {t_max}°C"
     else:
@@ -204,7 +212,7 @@ async def check_weather_alerts(test_mode=False):
     elif alerts:
         await client.send_message(CHANNEL_USERNAME, "\n".join(alerts) + FOOTER)
 
-# === ТАЙМЕРИ (За Київським часом) ===
+# === ТАЙМЕРИ (КИЇВ) ===
 async def morning_loop():
     logger.info("Starting Morning Loop (Kyiv Time)")
     while True:
@@ -238,7 +246,7 @@ async def evening_loop():
 async def weather_loop():
     while True:
         await check_weather_alerts(test_mode=False)
-        await asyncio.sleep(1800) # Перевірка кожні 30 хв
+        await asyncio.sleep(1800) 
 
 # === ПАРСЕР ГРАФІКІВ ===
 def parse_schedule(text):
@@ -256,10 +264,13 @@ def parse_schedule(text):
     return schedule
 
 def ask_gemini_schedule(photo_path):
+    # Промпт змінено: СУВОРА вимога тільки валідних груп
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key={GEMINI_KEY}"
     try:
         with open(photo_path, "rb") as f: img = base64.b64encode(f.read()).decode("utf-8")
-        payload = {"contents": [{"parts": [{"text": "Extract schedule. JSON: [{\"group\": \"1.1\", \"start\": \"HH:MM\", \"end\": \"HH:MM\"}]"}, {"inline_data": {"mime_type": "image/jpeg", "data": img}}]}]}
+        prompt_text = "Extract DTEK schedule. ONLY valid groups: 1.1, 1.2, 2.1, 2.2, 3.1, 3.2, 4.1, 4.2, 5.1, 5.2, 6.1, 6.2. Ignore any others (like 0.5, 7.5). JSON: [{\"group\": \"1.1\", \"start\": \"HH:MM\", \"end\": \"HH:MM\"}]"
+        
+        payload = {"contents": [{"parts": [{"text": prompt_text}, {"inline_data": {"mime_type": "image/jpeg", "data": img}}]}]}
         r = requests.post(url, json=payload, headers={'Content-Type': 'application/json'}, timeout=15)
         return json.loads(r.json()['candidates'][0]['content']['parts'][0]['text'].replace('```json', '').replace('```', '').strip())
     except: return []
@@ -272,7 +283,7 @@ async def handler(event):
     chat_id = event.chat_id
     global IS_ALARM_ACTIVE
 
-    # === РУЧНІ ТЕСТИ ===
+    # === ТЕСТИ ===
     if event.out:
         if "test_morning" in text:
             await event.respond("🌅 Тестую ранок...")
@@ -351,17 +362,20 @@ async def handler(event):
                 end = parser.parse(entry['end'])
                 grp = entry.get('group', '?')
                 
+                # === ФІЛЬТР НЕІСНУЮЧИХ ГРУП ===
+                if grp not in VALID_GROUPS:
+                    logger.warning(f"Ignored invalid group: {grp}")
+                    continue
+
                 main_grp = grp.split('.')[0] if '.' in grp else grp
                 if prev_grp and main_grp != prev_grp: msg_lines.append("➖➖➖➖➖➖➖➖")
                 prev_grp = main_grp
                 
-                # Особливе виділення групи 1.1
                 if grp == MY_PERSONAL_GROUP:
                     msg_lines.append(f"👉 🏠 **Гр. {grp}:** {start.strftime('%H:%M')} - {end.strftime('%H:%M')} 👈")
                 else:
                     msg_lines.append(f"🔹 **Гр. {grp}:** {start.strftime('%H:%M')} - {end.strftime('%H:%M')}")
                 
-                # Google Tasks (Тільки для 1.1)
                 if grp == MY_PERSONAL_GROUP:
                     notif = start - timedelta(hours=2, minutes=10)
                     task = {'title': f"💡 СВІТЛО (Гр. {grp})", 'notes': f"{start.strftime('%H:%M')}-{end.strftime('%H:%M')}", 'due': notif.isoformat() + 'Z'}
