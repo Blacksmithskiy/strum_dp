@@ -15,7 +15,7 @@ from telethon.sessions import StringSession
 from telethon.tl.functions.channels import JoinChannelRequest
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
-from dateutil import parser # Додано для парсингу часу
+from dateutil import parser
 
 # === ЛОГУВАННЯ ===
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
@@ -25,11 +25,26 @@ logger = logging.getLogger(__name__)
 MY_PERSONAL_GROUP = "1.1"
 CHANNEL_USERNAME = "@strum_dp"
 SIREN_CHANNEL_USER = "sirena_dp"
+MONITOR_CHANNEL_USER = "hyevuy_dnepr"
 DNIPRO_LAT = 48.46
 DNIPRO_LON = 35.04
 
 # === ВАЛІДНІ ГРУПИ ===
 VALID_GROUPS = ["1.1", "1.2", "2.1", "2.2", "3.1", "3.2", "4.1", "4.2", "5.1", "5.2", "6.1", "6.2"]
+
+# === ТРИГЕРИ ЗАГРОЗ ===
+THREAT_TRIGGERS = [
+    "бпла", "шахед", "дрон", 
+    "балістика", "балистика",
+    "вибух", "взрыв",
+    "гучно", "громко",
+    "ракета", "атака",
+    "тривога", "тревога",
+    "загроза", "угроза",
+    "над містом", "над городом",
+    "курс на дніпро", "курсом на дніпро",
+    "без загроз", "чисто", "розвідник"
+]
 
 # === ЗМІННІ ===
 API_ID = int(os.environ['API_ID'])
@@ -38,7 +53,7 @@ SESSION_STRING = os.environ['TELEGRAM_SESSION']
 GEMINI_KEY = os.environ['GEMINI_API_KEY']
 GOOGLE_TOKEN = os.environ['GOOGLE_TOKEN_JSON']
 
-# === МЕДІА (Стабільні посилання з захистом) ===
+# === МЕДІА ===
 URL_MORNING = "https://arcanavisio.com/wp-content/uploads/2026/01/01_MORNING.jpg"
 URL_EVENING = "https://arcanavisio.com/wp-content/uploads/2026/01/02_EVENING.jpg"
 URL_GRAFIC = "https://arcanavisio.com/wp-content/uploads/2026/01/03_GRAFIC.jpg"
@@ -54,17 +69,15 @@ TXT_TREVOGA_STOP = "<b>✅ ВІДБІЙ ПОВІТРЯНОЇ ТРИВОГИ.</b>
 TXT_EXTRA_START = "<b>⚡❗️УВАГА! ЗАСТОСОВАНІ ЕКСТРЕНІ ВІДКЛЮЧЕННЯ.</b>\n\n<b>ПІД ЧАС ЕКСТРЕНИХ ВІДКЛЮЧЕНЬ ГРАФІКИ НЕ ДІЮТЬ.</b>"
 TXT_EXTRA_STOP = "<b>⚡️✔️ ЕКСТРЕНІ ВІДКЛЮЧЕННЯ СВІТЛА СКАСОВАНІ.</b>"
 
+# === ФУТЕР ===
 FOOTER = """
 ____
 
-⭐️Підписуйтесь та поділіться з друзями: 
-⚡️СТРУМ ДНІПРА <a href="https://t.me/strum_dp">https://t.me/strum_dp</a>
-
-❤️ПІДТРИМКА СЕРВІСУ: 
-<a href="https://send.monobank.ua/jar/9gBQ4LTLUa">https://send.monobank.ua/jar/9gBQ4LTLUa</a>
+⭐️ <a href="https://t.me/strum_dp">ПІДПИСУЙТЕСЬ ТА ПОДІЛІТЬСЯ З ДРУЗЯМИ</a>
+❤️ <a href="https://send.monobank.ua/jar/9gBQ4LTLUa">ПІДТРИМКА СЕРВІСУ</a>
 ____
 
-⚡️ @strum_dp"""
+@strum_dp"""
 
 # === ЦИТАТИ ===
 BACKUP_MORNING = [
@@ -94,6 +107,26 @@ async def get_tasks_service():
     creds = Credentials.from_authorized_user_info(creds_dict)
     return build('tasks', 'v1', credentials=creds)
 
+# === ЛОГІКА ЕМОДЗІ ===
+def add_smart_emojis(text):
+    t = text.lower()
+    prefix = ""
+    
+    if any(w in t for w in ["балістика", "балистика", "ракета"]):
+        prefix = "🚀 "
+    elif any(w in t for w in ["бпла", "шахед", "дрон", "мопед"]):
+        prefix = "🦟 "
+    elif any(w in t for w in ["вибух", "взрыв", "гучно"]):
+        prefix = "💥 "
+    elif "розвідник" in t:
+        prefix = "👁️ "
+    elif any(w in t for w in ["відбій", "чисто", "без загроз"]):
+        prefix = "🟢 "
+    elif "загроза" in t:
+        prefix = "⚠️ "
+        
+    return prefix + text
+
 # === AI ===
 def get_ai_quote(mode="morning"):
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key={GEMINI_KEY}"
@@ -116,24 +149,22 @@ def get_weather():
         except: time.sleep(2)
     return None
 
-# === ВІДПРАВКА (Захист від зависання) ===
+# === ВІДПРАВКА ===
 async def send_safe(text, img_url):
     try:
-        # Спроба скачати картинку (таймаут 10 сек)
         response = await asyncio.to_thread(requests.get, img_url, headers=HEADERS, timeout=10)
         if response.status_code == 200:
             photo_file = io.BytesIO(response.content)
             photo_file.name = "image.jpg"
-            await client.send_message(CHANNEL_USERNAME, text + FOOTER, file=photo_file, parse_mode='html')
-            return
+            return await client.send_message(CHANNEL_USERNAME, text + FOOTER, file=photo_file, parse_mode='html')
     except Exception as e:
         logger.warning(f"Image download failed: {e}")
     
-    # Якщо картинка не завантажилась - шлемо текст
     try:
-        await client.send_message(CHANNEL_USERNAME, text + FOOTER, parse_mode='html')
+        return await client.send_message(CHANNEL_USERNAME, text + FOOTER, parse_mode='html')
     except Exception as e:
         logger.error(f"Text send failed: {e}")
+        return None
 
 # === ДАЙДЖЕСТИ ===
 async def send_morning_digest():
@@ -200,7 +231,7 @@ async def schedule_loop():
         
         await asyncio.sleep(60)
 
-# === ПАРСЕР (З ВИПРАВЛЕННЯМ 24:00) ===
+# === ПАРСЕР ===
 def parse_schedule(text):
     schedule = []
     today = datetime.now().strftime('%Y-%m-%d')
@@ -222,18 +253,12 @@ def parse_schedule(text):
             if times_in_line:
                 for grp in groups_in_line:
                     for t in times_in_line:
-                        # ВИПРАВЛЕННЯ 24:00
-                        end_t = t[1]
-                        if end_t == "24:00": end_t = "23:59"
-                        
+                        end_t = t[1].replace("24:00", "23:59")
                         schedule.append({"group": grp, "start": f"{today}T{t[0]}:00", "end": f"{today}T{end_t}:00"})
         elif times_in_line and current_groups:
             for grp in current_groups:
                 for t in times_in_line:
-                    # ВИПРАВЛЕННЯ 24:00
-                    end_t = t[1]
-                    if end_t == "24:00": end_t = "23:59"
-                    
+                    end_t = t[1].replace("24:00", "23:59")
                     schedule.append({"group": grp, "start": f"{today}T{t[0]}:00", "end": f"{today}T{end_t}:00"})
     return schedule
 
@@ -249,16 +274,35 @@ def ask_gemini_schedule(photo_path):
 
 client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
 
+# === 1. МОНІТОРИНГ ЗАГРОЗ (ПОВНИЙ ФУНКЦІОНАЛ) ===
+@client.on(events.NewMessage(chats=MONITOR_CHANNEL_USER))
+async def threat_handler(event):
+    text = (event.message.message or "")
+    text_lower = text.lower()
+    
+    if any(trigger in text_lower for trigger in THREAT_TRIGGERS):
+        try:
+            # Додаємо емодзі по змісту
+            formatted_text = add_smart_emojis(text)
+            
+            # Відправляємо текст
+            await client.send_message(CHANNEL_USERNAME, formatted_text + FOOTER, parse_mode='html')
+            logger.info(f"Threat alert reposted: {text[:30]}...")
+        except Exception as e:
+            logger.error(f"Threat repost failed: {e}")
+
+# === 2. ОСНОВНИЙ ОБРОБНИК (ТЕСТИ + ЛОГІКА) ===
 @client.on(events.NewMessage())
-async def handler(event):
+async def main_handler(event):
     try:
         chat = await event.get_chat()
         username = chat.username.lower() if chat and hasattr(chat, 'username') and chat.username else ""
+        if username == MONITOR_CHANNEL_USER.lower(): return
     except: username = ""
     
     text = (event.message.message or "").lower()
     
-    # === ТЕСТИ ===
+    # === ТЕСТИ (Всі режими) ===
     if event.out:
         if "test_morning" in text:
             await event.respond("🌅 Тест ранку...")
@@ -272,15 +316,33 @@ async def handler(event):
             await event.respond("💨 Тест погоди...")
             await check_weather_alerts(test_mode=True)
             return
+        if "test_siren" in text:
+            global IS_ALARM_ACTIVE
+            if "відбій" in text or "отбой" in text or "stop" in text:
+                IS_ALARM_ACTIVE = False
+                await send_safe(TXT_TREVOGA_STOP, URL_TREVOGA_STOP)
+                await event.respond("✅ Тест: Відбій")
+            else: # start / тривога
+                IS_ALARM_ACTIVE = True
+                await send_safe(TXT_TREVOGA, URL_TREVOGA)
+                await event.respond("⚠️ Тест: Тривога")
+            return
+        if "test_threat" in text:
+            # Приклад використання: test_threat Увага шахед летить на Дніпро
+            # Бот візьме текст після команди і обробить його як загрозу
+            content = event.message.message.replace("test_threat", "").strip()
+            if not content: content = "Тестова загроза: БпЛА в напрямку Дніпра"
+            formatted = add_smart_emojis(content)
+            await client.send_message(CHANNEL_USERNAME, formatted + FOOTER, parse_mode='html')
+            await event.respond(f"🧨 Тест загрози відправлено: {content}")
+            return
 
-    # === СИРЕНА ===
+    # === СИРЕНА (Реальна) ===
     is_siren = False
     if REAL_SIREN_ID and event.chat_id == REAL_SIREN_ID: is_siren = True
     if username == SIREN_CHANNEL_USER: is_siren = True
-    if "test_siren" in text and event.out: is_siren = True
     
     if is_siren:
-        global IS_ALARM_ACTIVE
         if "відбій" in text or "отбой" in text:
             IS_ALARM_ACTIVE = False
             await send_safe(TXT_TREVOGA_STOP, URL_TREVOGA_STOP)
@@ -299,12 +361,9 @@ async def handler(event):
 
     # === ГРАФІКИ ===
     schedule = []
-    # 1. Текст (Контекстний парсер)
     if re.search(r'[1-6]\.[1-2]', text) and re.search(r'\d{1,2}:\d{2}', text):
         if event.out or event.is_private:
              schedule = parse_schedule(event.message.message)
-    
-    # 2. Фото
     elif event.message.photo:
         if event.out or event.is_private:
             async with processing_lock:
@@ -335,30 +394,33 @@ async def handler(event):
                 if grp not in VALID_GROUPS: continue 
                 
                 has_valid = True
-                # ВИПРАВЛЕННЯ 24:00 для AI парсера (на всяк випадок)
                 if entry['end'].endswith("T24:00:00"):
                      entry['end'] = entry['end'].replace("T24:00:00", "T23:59:00")
 
                 start = parser.parse(entry['start'])
                 end = parser.parse(entry['end'])
                 
-                main_grp = grp.split('.')[0]
-                if prev_grp and main_grp != prev_grp: msg_lines.append("➖➖➖➖➖➖➖➖")
-                prev_grp = main_grp
+                if prev_grp and grp != prev_grp: 
+                    msg_lines.append("➖➖➖➖➖➖➖➖")
+                prev_grp = grp
+                
+                msg_lines.append(f"🔹 <b>Гр. {grp}:</b> {start.strftime('%H:%M')} - {end.strftime('%H:%M')}")
                 
                 if grp == MY_PERSONAL_GROUP:
-                    msg_lines.append(f"👉 🏠 <b>Гр. {grp}:</b> {start.strftime('%H:%M')} - {end.strftime('%H:%M')} 👈")
                     try:
                         notif = start - timedelta(hours=2, minutes=10)
                         task = {'title': f"💡 СВІТЛО (Гр. {grp})", 'notes': f"{start.strftime('%H:%M')}-{end.strftime('%H:%M')}", 'due': notif.isoformat() + 'Z'}
                         service.tasks().insert(tasklist='@default', body=task).execute()
                     except: pass
-                else:
-                    msg_lines.append(f"🔹 <b>Гр. {grp}:</b> {start.strftime('%H:%M')} - {end.strftime('%H:%M')}")
+
             except: continue
         
         if has_valid:
-            await send_safe("\n".join(msg_lines), img_url)
+            msg = await send_safe("\n".join(msg_lines), img_url)
+            if msg:
+                try:
+                    await client.pin_message(CHANNEL_USERNAME, msg, notify=True)
+                except: pass
 
 async def startup():
     global REAL_SIREN_ID
@@ -366,8 +428,13 @@ async def startup():
         await client(JoinChannelRequest(SIREN_CHANNEL_USER))
         e = await client.get_entity(SIREN_CHANNEL_USER)
         REAL_SIREN_ID = int(f"-100{e.id}")
+        
+        # Моніторинг загроз
+        await client(JoinChannelRequest(MONITOR_CHANNEL_USER))
+        
         logger.info("✅ Bot Started.")
-    except: pass
+    except Exception as e:
+        logger.error(f"Startup Error: {e}")
 
 if __name__ == '__main__':
     client.start()
