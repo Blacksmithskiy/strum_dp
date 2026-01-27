@@ -69,12 +69,12 @@ TXT_TREVOGA_STOP = "<b>✅ ВІДБІЙ ПОВІТРЯНОЇ ТРИВОГИ.</b>
 TXT_EXTRA_START = "<b>⚡❗️УВАГА! ЗАСТОСОВАНІ ЕКСТРЕНІ ВІДКЛЮЧЕННЯ.</b>\n\n<b>ПІД ЧАС ЕКСТРЕНИХ ВІДКЛЮЧЕНЬ ГРАФІКИ НЕ ДІЮТЬ.</b>"
 TXT_EXTRA_STOP = "<b>⚡️✔️ ЕКСТРЕНІ ВІДКЛЮЧЕННЯ СВІТЛА СКАСОВАНІ.</b>"
 
-# === ФУТЕР ===
+# === ФУТЕР (НОВИЙ) ===
 FOOTER = """
 ____
 
-⭐️ <a href="https://t.me/strum_dp">ПІДПИСУЙТЕСЬ ТА ПОДІЛІТЬСЯ З ДРУЗЯМИ</a>
-❤️ <a href="https://send.monobank.ua/jar/9gBQ4LTLUa">ПІДТРИМКА СЕРВІСУ</a>
+⭐️ <a href="https://t.me/strum_dp"><b>ПІДПИСУЙТЕСЬ</b></a>
+❤️ <a href="https://send.monobank.ua/jar/9gBQ4LTLUa"><b>ПІДТРИМАЙТЕ СЕРВІС</b></a>
 ____
 
 @strum_dp"""
@@ -107,25 +107,32 @@ async def get_tasks_service():
     creds = Credentials.from_authorized_user_info(creds_dict)
     return build('tasks', 'v1', credentials=creds)
 
-# === ЛОГІКА ЕМОДЗІ ===
-def add_smart_emojis(text):
+# === ЛОГІКА ЗАГРОЗ (CAPS + EMOJI + УВАГА) ===
+def format_threat_text(text):
     t = text.lower()
-    prefix = ""
-    
+    emoji = "⚡️"
+    is_danger = True
+
     if any(w in t for w in ["балістика", "балистика", "ракета"]):
-        prefix = "🚀 "
+        emoji = "🚀"
     elif any(w in t for w in ["бпла", "шахед", "дрон", "мопед"]):
-        prefix = "🦟 "
+        emoji = "🛩️"
     elif any(w in t for w in ["вибух", "взрыв", "гучно"]):
-        prefix = "💥 "
+        emoji = "💥"
     elif "розвідник" in t:
-        prefix = "👁️ "
+        emoji = "👁️"
     elif any(w in t for w in ["відбій", "чисто", "без загроз"]):
-        prefix = "🟢 "
+        emoji = "🟢"
+        is_danger = False
     elif "загроза" in t:
-        prefix = "⚠️ "
+        emoji = "⚠️"
         
-    return prefix + text
+    text_caps = text.upper()
+    
+    if is_danger:
+        return f"{emoji} <b>УВАГА! {text_caps}</b>"
+    else:
+        return f"{emoji} <b>{text_caps}</b>"
 
 # === AI ===
 def get_ai_quote(mode="morning"):
@@ -274,7 +281,7 @@ def ask_gemini_schedule(photo_path):
 
 client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
 
-# === 1. МОНІТОРИНГ ЗАГРОЗ (ПОВНИЙ ФУНКЦІОНАЛ) ===
+# === 1. МОНІТОРИНГ ЗАГРОЗ ===
 @client.on(events.NewMessage(chats=MONITOR_CHANNEL_USER))
 async def threat_handler(event):
     text = (event.message.message or "")
@@ -282,16 +289,13 @@ async def threat_handler(event):
     
     if any(trigger in text_lower for trigger in THREAT_TRIGGERS):
         try:
-            # Додаємо емодзі по змісту
-            formatted_text = add_smart_emojis(text)
-            
-            # Відправляємо текст
+            formatted_text = format_threat_text(text)
             await client.send_message(CHANNEL_USERNAME, formatted_text + FOOTER, parse_mode='html')
             logger.info(f"Threat alert reposted: {text[:30]}...")
         except Exception as e:
             logger.error(f"Threat repost failed: {e}")
 
-# === 2. ОСНОВНИЙ ОБРОБНИК (ТЕСТИ + ЛОГІКА) ===
+# === 2. ОСНОВНИЙ ОБРОБНИК ===
 @client.on(events.NewMessage())
 async def main_handler(event):
     try:
@@ -302,7 +306,7 @@ async def main_handler(event):
     
     text = (event.message.message or "").lower()
     
-    # === ТЕСТИ (Всі режими) ===
+    # === ТЕСТИ ===
     if event.out:
         if "test_morning" in text:
             await event.respond("🌅 Тест ранку...")
@@ -328,16 +332,14 @@ async def main_handler(event):
                 await event.respond("⚠️ Тест: Тривога")
             return
         if "test_threat" in text:
-            # Приклад використання: test_threat Увага шахед летить на Дніпро
-            # Бот візьме текст після команди і обробить його як загрозу
             content = event.message.message.replace("test_threat", "").strip()
             if not content: content = "Тестова загроза: БпЛА в напрямку Дніпра"
-            formatted = add_smart_emojis(content)
+            formatted = format_threat_text(content)
             await client.send_message(CHANNEL_USERNAME, formatted + FOOTER, parse_mode='html')
             await event.respond(f"🧨 Тест загрози відправлено: {content}")
             return
 
-    # === СИРЕНА (Реальна) ===
+    # === СИРЕНА ===
     is_siren = False
     if REAL_SIREN_ID and event.chat_id == REAL_SIREN_ID: is_siren = True
     if username == SIREN_CHANNEL_USER: is_siren = True
@@ -429,7 +431,6 @@ async def startup():
         e = await client.get_entity(SIREN_CHANNEL_USER)
         REAL_SIREN_ID = int(f"-100{e.id}")
         
-        # Моніторинг загроз
         await client(JoinChannelRequest(MONITOR_CHANNEL_USER))
         
         logger.info("✅ Bot Started.")
