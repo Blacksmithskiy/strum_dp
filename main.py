@@ -25,7 +25,11 @@ logger = logging.getLogger(__name__)
 MY_PERSONAL_GROUP = "1.1"
 CHANNEL_USERNAME = "@strum_dp"
 SIREN_CHANNEL_USER = "sirena_dp"
-MONITOR_CHANNEL_USER = "hyevuy_dnepr"
+
+# КАНАЛИ ДЛЯ МОНІТОРИНГУ
+MONITOR_THREATS_USER = "hyevuy_dnepr"       # Загрози
+MONITOR_SCHEDULE_USER = "avariykaaa_dnepr_radar" # Графіки (Світло)
+
 DNIPRO_LAT = 48.46
 DNIPRO_LON = 35.04
 
@@ -46,13 +50,15 @@ THREAT_TRIGGERS = [
     "без загроз", "чисто", "розвідник"
 ]
 
-# === ФРАЗИ ДЛЯ ВИДАЛЕННЯ (Сміття/Реклама) ===
+# === ФРАЗИ ДЛЯ ВИДАЛЕННЯ ===
 JUNK_PHRASES = [
     "КОНТЕНТ 👉 @HYDNEPRBOT",
     "@HYDNEPRBOT",
     "👉 @HYDNEPRBOT",
     "надслати новину",
-    "прислать новость"
+    "прислать новость",
+    "підписатися",
+    "подписаться"
 ]
 
 # === ЗМІННІ ===
@@ -72,13 +78,13 @@ URL_EXTRA_STOP = "https://arcanavisio.com/wp-content/uploads/2026/01/06_EXTRA_ST
 URL_TREVOGA = "https://arcanavisio.com/wp-content/uploads/2026/01/07_TREVOGA.jpg"
 URL_TREVOGA_STOP = "https://arcanavisio.com/wp-content/uploads/2026/01/08_TREVOGA_STOP.jpg"
 
-# === ТЕКСТИ (HTML) ===
+# === ТЕКСТИ ===
 TXT_TREVOGA = "<b>⚠️❗️ УВАГА! ОГОЛОШЕНО ПОВІТРЯНУ ТРИВОГУ.</b>\n\n🏃 <b>ВСІМ ПРОЙТИ В УКРИТТЯ.</b>"
 TXT_TREVOGA_STOP = "<b>✅ ВІДБІЙ ПОВІТРЯНОЇ ТРИВОГИ.</b>"
 TXT_EXTRA_START = "<b>⚡❗️УВАГА! ЗАСТОСОВАНІ ЕКСТРЕНІ ВІДКЛЮЧЕННЯ.</b>\n\n<b>ПІД ЧАС ЕКСТРЕНИХ ВІДКЛЮЧЕНЬ ГРАФІКИ НЕ ДІЮТЬ.</b>"
 TXT_EXTRA_STOP = "<b>⚡️✔️ ЕКСТРЕНІ ВІДКЛЮЧЕННЯ СВІТЛА СКАСОВАНІ.</b>"
 
-# === ФУТЕР (ОНОВЛЕНИЙ) ===
+# === ФУТЕР ===
 FOOTER = """
 ____
 
@@ -117,7 +123,6 @@ async def get_tasks_service():
 
 # === ЛОГІКА ФОРМАТУВАННЯ ЗАГРОЗ ===
 def format_threat_text(text):
-    # 1. Чистимо сміття та рекламу
     for junk in JUNK_PHRASES:
         text = text.replace(junk, "")
     
@@ -125,7 +130,6 @@ def format_threat_text(text):
     t_lower = text.lower()
     emoji = "⚡️"
 
-    # 2. Підбираємо Емодзі
     if any(w in t_lower for w in ["балістика", "балистика", "ракета"]):
         emoji = "🚀"
     elif any(w in t_lower for w in ["бпла", "шахед", "дрон", "мопед"]):
@@ -139,12 +143,9 @@ def format_threat_text(text):
     elif "загроза" in t_lower:
         emoji = "⚠️"
         
-    # 3. Логіка регістру (Короткі - CAPS, Довгі - Звичайні)
     if len(text) < 60:
-        # Короткі термінові повідомлення -> CAPS + BOLD
         final_text = f"<b>{text.upper()}</b>"
     else:
-        # Довгі зведення -> Звичайний шрифт (зберігаємо форматування джерела)
         final_text = text
 
     return f"{emoji} {final_text}"
@@ -190,7 +191,6 @@ async def send_safe(text, img_url):
 
 # === ДАЙДЖЕСТИ ===
 async def send_morning_digest():
-    logger.info("Digest: Morning")
     data = await asyncio.to_thread(get_weather)
     w_text = "🌡 <b>Погода:</b> Тимчасово недоступна."
     if data:
@@ -203,7 +203,6 @@ async def send_morning_digest():
     await send_safe(msg, URL_MORNING)
 
 async def send_evening_digest():
-    logger.info("Digest: Evening")
     data = await asyncio.to_thread(get_weather)
     w_text = "🌡 <b>Погода на завтра:</b> Дані оновлюються."
     if data:
@@ -232,7 +231,6 @@ async def check_weather_alerts(test_mode=False):
 
 # === ТАЙМЕРИ ===
 async def schedule_loop():
-    logger.info("Scheduler Started")
     while True:
         now = datetime.now(ZoneInfo("Europe/Kyiv"))
         t_m = now.replace(hour=8, minute=0, second=0, microsecond=0)
@@ -242,15 +240,10 @@ async def schedule_loop():
         
         next_evt = min(t_m, t_e)
         secs = (next_evt - now).total_seconds()
-        
-        if secs < 3600 or now.minute == 0:
-            logger.info(f"Next post in {int(secs)}s")
-        
         await asyncio.sleep(secs)
         
         if next_evt == t_m: await send_morning_digest()
         else: await send_evening_digest()
-        
         await asyncio.sleep(60)
 
 # === ПАРСЕР ===
@@ -296,8 +289,8 @@ def ask_gemini_schedule(photo_path):
 
 client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
 
-# === 1. МОНІТОРИНГ ЗАГРОЗ ===
-@client.on(events.NewMessage(chats=MONITOR_CHANNEL_USER))
+# === 1. МОНІТОРИНГ ЗАГРОЗ (ХД) ===
+@client.on(events.NewMessage(chats=MONITOR_THREATS_USER))
 async def threat_handler(event):
     text = (event.message.message or "")
     text_lower = text.lower()
@@ -310,13 +303,25 @@ async def threat_handler(event):
         except Exception as e:
             logger.error(f"Threat repost failed: {e}")
 
-# === 2. ОСНОВНИЙ ОБРОБНИК ===
+# === 2. МОНІТОРИНГ ГРАФІКІВ (АВАРІЙКА) ===
+@client.on(events.NewMessage(chats=MONITOR_SCHEDULE_USER))
+async def schedule_monitor_handler(event):
+    text = (event.message.message or "").lower()
+    
+    # Якщо в пості є ознаки графіку
+    if re.search(r'[1-6]\.[1-2]', text) and re.search(r'\d{1,2}:\d{2}', text):
+        logger.info("Schedule detected in monitor channel!")
+        # Викликаємо функцію обробки графіку, імітуючи подію
+        await process_schedule_event(event)
+
+# === 3. ОСНОВНИЙ ОБРОБНИК (ТЕСТИ + СИРЕНИ + РУЧНІ ГРАФІКИ) ===
 @client.on(events.NewMessage())
 async def main_handler(event):
     try:
         chat = await event.get_chat()
         username = chat.username.lower() if chat and hasattr(chat, 'username') and chat.username else ""
-        if username == MONITOR_CHANNEL_USER.lower(): return
+        # Ігноруємо канали моніторингу (вони обробляються окремо)
+        if username in [MONITOR_THREATS_USER.lower(), MONITOR_SCHEDULE_USER.lower()]: return
     except: username = ""
     
     text = (event.message.message or "").lower()
@@ -376,12 +381,27 @@ async def main_handler(event):
             await send_safe(TXT_EXTRA_START, URL_EXTRA_START)
         return
 
-    # === ГРАФІКИ ===
+    # === ГРАФІКИ (РУЧНІ АБО З ФОТО) ===
+    await process_schedule_event(event)
+
+# === УНІВЕРСАЛЬНА ФУНКЦІЯ ОБРОБКИ ГРАФІКІВ ===
+async def process_schedule_event(event):
+    text = (event.message.message or "").lower()
     schedule = []
+    
+    # 1. Текст
     if re.search(r'[1-6]\.[1-2]', text) and re.search(r'\d{1,2}:\d{2}', text):
-        if event.out or event.is_private:
-             schedule = parse_schedule(event.message.message)
+        schedule = parse_schedule(event.message.message)
+    
+    # 2. Фото (Тільки якщо це не з каналу моніторингу графіків, щоб не витрачати ресурси дарма)
     elif event.message.photo:
+        # Перевірка: тільки свої повідомлення або приват
+        is_monitor = False
+        try:
+            chat = await event.get_chat()
+            if chat and chat.username and chat.username.lower() == MONITOR_SCHEDULE_USER.lower(): is_monitor = True
+        except: pass
+
         if event.out or event.is_private:
             async with processing_lock:
                 try:
@@ -446,7 +466,8 @@ async def startup():
         e = await client.get_entity(SIREN_CHANNEL_USER)
         REAL_SIREN_ID = int(f"-100{e.id}")
         
-        await client(JoinChannelRequest(MONITOR_CHANNEL_USER))
+        await client(JoinChannelRequest(MONITOR_THREATS_USER))
+        await client(JoinChannelRequest(MONITOR_SCHEDULE_USER))
         
         logger.info("✅ Bot Started.")
     except Exception as e:
