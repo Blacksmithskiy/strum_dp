@@ -46,6 +46,15 @@ THREAT_TRIGGERS = [
     "без загроз", "чисто", "розвідник"
 ]
 
+# === ФРАЗИ ДЛЯ ВИДАЛЕННЯ (Сміття/Реклама) ===
+JUNK_PHRASES = [
+    "КОНТЕНТ 👉 @HYDNEPRBOT",
+    "@HYDNEPRBOT",
+    "👉 @HYDNEPRBOT",
+    "надслати новину",
+    "прислать новость"
+]
+
 # === ЗМІННІ ===
 API_ID = int(os.environ['API_ID'])
 API_HASH = os.environ['API_HASH']
@@ -69,13 +78,12 @@ TXT_TREVOGA_STOP = "<b>✅ ВІДБІЙ ПОВІТРЯНОЇ ТРИВОГИ.</b>
 TXT_EXTRA_START = "<b>⚡❗️УВАГА! ЗАСТОСОВАНІ ЕКСТРЕНІ ВІДКЛЮЧЕННЯ.</b>\n\n<b>ПІД ЧАС ЕКСТРЕНИХ ВІДКЛЮЧЕНЬ ГРАФІКИ НЕ ДІЮТЬ.</b>"
 TXT_EXTRA_STOP = "<b>⚡️✔️ ЕКСТРЕНІ ВІДКЛЮЧЕННЯ СВІТЛА СКАСОВАНІ.</b>"
 
-# === ФУТЕР (НОВИЙ) ===
+# === ФУТЕР (ОНОВЛЕНИЙ) ===
 FOOTER = """
 ____
 
-⭐️ <a href="https://t.me/strum_dp"><b>ПІДПИСУЙТЕСЬ</b></a>
-❤️ <a href="https://send.monobank.ua/jar/9gBQ4LTLUa"><b>ПІДТРИМАЙТЕ СЕРВІС</b></a>
-____
+⭐️ <a href="https://t.me/strum_dp">ПІДПИСАТИСЬ НА КАНАЛ</a>
+❤️ <a href="https://send.monobank.ua/jar/9gBQ4LTLUa">ПІДТРИМАТИ СЕРВІС</a>
 
 @strum_dp"""
 
@@ -107,32 +115,39 @@ async def get_tasks_service():
     creds = Credentials.from_authorized_user_info(creds_dict)
     return build('tasks', 'v1', credentials=creds)
 
-# === ЛОГІКА ЗАГРОЗ (CAPS + EMOJI + УВАГА) ===
+# === ЛОГІКА ФОРМАТУВАННЯ ЗАГРОЗ ===
 def format_threat_text(text):
-    t = text.lower()
+    # 1. Чистимо сміття та рекламу
+    for junk in JUNK_PHRASES:
+        text = text.replace(junk, "")
+    
+    text = text.strip()
+    t_lower = text.lower()
     emoji = "⚡️"
-    is_danger = True
 
-    if any(w in t for w in ["балістика", "балистика", "ракета"]):
+    # 2. Підбираємо Емодзі
+    if any(w in t_lower for w in ["балістика", "балистика", "ракета"]):
         emoji = "🚀"
-    elif any(w in t for w in ["бпла", "шахед", "дрон", "мопед"]):
-        emoji = "🛩️"
-    elif any(w in t for w in ["вибух", "взрыв", "гучно"]):
+    elif any(w in t_lower for w in ["бпла", "шахед", "дрон", "мопед"]):
+        emoji = "🦟"
+    elif any(w in t_lower for w in ["вибух", "взрыв", "гучно"]):
         emoji = "💥"
-    elif "розвідник" in t:
+    elif "розвідник" in t_lower:
         emoji = "👁️"
-    elif any(w in t for w in ["відбій", "чисто", "без загроз"]):
+    elif any(w in t_lower for w in ["відбій", "чисто", "без загроз"]):
         emoji = "🟢"
-        is_danger = False
-    elif "загроза" in t:
+    elif "загроза" in t_lower:
         emoji = "⚠️"
         
-    text_caps = text.upper()
-    
-    if is_danger:
-        return f"{emoji} <b>УВАГА! {text_caps}</b>"
+    # 3. Логіка регістру (Короткі - CAPS, Довгі - Звичайні)
+    if len(text) < 60:
+        # Короткі термінові повідомлення -> CAPS + BOLD
+        final_text = f"<b>{text.upper()}</b>"
     else:
-        return f"{emoji} <b>{text_caps}</b>"
+        # Довгі зведення -> Звичайний шрифт (зберігаємо форматування джерела)
+        final_text = text
+
+    return f"{emoji} {final_text}"
 
 # === AI ===
 def get_ai_quote(mode="morning"):
