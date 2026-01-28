@@ -25,11 +25,8 @@ logger = logging.getLogger(__name__)
 MY_PERSONAL_GROUP = "1.1"
 CHANNEL_USERNAME = "@strum_dp"
 SIREN_CHANNEL_USER = "sirena_dp"
-
-# КАНАЛИ ДЛЯ МОНІТОРИНГУ
-MONITOR_THREATS_USER = "hyevuy_dnepr"       # Загрози
-MONITOR_SCHEDULE_USER = "avariykaaa_dnepr_radar" # Графіки (Світло)
-
+MONITOR_THREATS_USER = "hyevuy_dnepr"
+MONITOR_SCHEDULE_USER = "avariykaaa_dnepr_radar"
 DNIPRO_LAT = 48.46
 DNIPRO_LON = 35.04
 
@@ -48,17 +45,6 @@ THREAT_TRIGGERS = [
     "над містом", "над городом",
     "курс на дніпро", "курсом на дніпро",
     "без загроз", "чисто", "розвідник"
-]
-
-# === ФРАЗИ ДЛЯ ВИДАЛЕННЯ ===
-JUNK_PHRASES = [
-    "КОНТЕНТ 👉 @HYDNEPRBOT",
-    "@HYDNEPRBOT",
-    "👉 @HYDNEPRBOT",
-    "надслати новину",
-    "прислать новость",
-    "підписатися",
-    "подписаться"
 ]
 
 # === ЗМІННІ ===
@@ -121,15 +107,27 @@ async def get_tasks_service():
     creds = Credentials.from_authorized_user_info(creds_dict)
     return build('tasks', 'v1', credentials=creds)
 
-# === ЛОГІКА ФОРМАТУВАННЯ ЗАГРОЗ ===
+# === ЛОГІКА ФОРМАТУВАННЯ ТА ОЧИЩЕННЯ (REGEX) ===
 def format_threat_text(text):
-    for junk in JUNK_PHRASES:
-        text = text.replace(junk, "")
+    # 1. ПОТУЖНЕ ОЧИЩЕННЯ СМІТТЯ (REGEX)
+    # (?i) - означає ігнорувати регістр (великі/малі літери)
     
+    # Видаляє: "Контент [будь-що] @hydneprbot"
+    text = re.sub(r"(?i)контент\s*.*@hydneprbot", "", text)
+    # Видаляє просто згадку: "@hydneprbot"
+    text = re.sub(r"(?i)@hydneprbot", "", text)
+    # Видаляє: "Надслати новину" і все що поруч
+    text = re.sub(r"(?i)надслати новину", "", text)
+    # Видаляє: "Підписатися"
+    text = re.sub(r"(?i)підписатися", "", text)
+    
+    # Прибираємо зайві пусті рядки, які могли залишитися після видалення
     text = text.strip()
+    
     t_lower = text.lower()
     emoji = "⚡️"
 
+    # 2. ПІДБІР ЕМОДЗІ
     if any(w in t_lower for w in ["балістика", "балистика", "ракета"]):
         emoji = "🚀"
     elif any(w in t_lower for w in ["бпла", "шахед", "дрон", "мопед"]):
@@ -143,6 +141,7 @@ def format_threat_text(text):
     elif "загроза" in t_lower:
         emoji = "⚠️"
         
+    # 3. ЛОГІКА РЕГІСТРУ
     if len(text) < 60:
         final_text = f"<b>{text.upper()}</b>"
     else:
@@ -287,8 +286,6 @@ def ask_gemini_schedule(photo_path):
         return json.loads(r.json()['candidates'][0]['content']['parts'][0]['text'].replace('```json', '').replace('```', '').strip())
     except: return []
 
-client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
-
 # === 1. МОНІТОРИНГ ЗАГРОЗ (ХД) ===
 @client.on(events.NewMessage(chats=MONITOR_THREATS_USER))
 async def threat_handler(event):
@@ -307,20 +304,16 @@ async def threat_handler(event):
 @client.on(events.NewMessage(chats=MONITOR_SCHEDULE_USER))
 async def schedule_monitor_handler(event):
     text = (event.message.message or "").lower()
-    
-    # Якщо в пості є ознаки графіку
     if re.search(r'[1-6]\.[1-2]', text) and re.search(r'\d{1,2}:\d{2}', text):
         logger.info("Schedule detected in monitor channel!")
-        # Викликаємо функцію обробки графіку, імітуючи подію
         await process_schedule_event(event)
 
-# === 3. ОСНОВНИЙ ОБРОБНИК (ТЕСТИ + СИРЕНИ + РУЧНІ ГРАФІКИ) ===
+# === 3. ОСНОВНИЙ ОБРОБНИК ===
 @client.on(events.NewMessage())
 async def main_handler(event):
     try:
         chat = await event.get_chat()
         username = chat.username.lower() if chat and hasattr(chat, 'username') and chat.username else ""
-        # Ігноруємо канали моніторингу (вони обробляються окремо)
         if username in [MONITOR_THREATS_USER.lower(), MONITOR_SCHEDULE_USER.lower()]: return
     except: username = ""
     
@@ -381,7 +374,7 @@ async def main_handler(event):
             await send_safe(TXT_EXTRA_START, URL_EXTRA_START)
         return
 
-    # === ГРАФІКИ (РУЧНІ АБО З ФОТО) ===
+    # === ГРАФІКИ ===
     await process_schedule_event(event)
 
 # === УНІВЕРСАЛЬНА ФУНКЦІЯ ОБРОБКИ ГРАФІКІВ ===
@@ -389,20 +382,18 @@ async def process_schedule_event(event):
     text = (event.message.message or "").lower()
     schedule = []
     
-    # 1. Текст
     if re.search(r'[1-6]\.[1-2]', text) and re.search(r'\d{1,2}:\d{2}', text):
         schedule = parse_schedule(event.message.message)
-    
-    # 2. Фото (Тільки якщо це не з каналу моніторингу графіків, щоб не витрачати ресурси дарма)
     elif event.message.photo:
-        # Перевірка: тільки свої повідомлення або приват
-        is_monitor = False
+        # Перевірка для фото: тільки свої повідомлення або моніторинг
+        is_allowed = False
+        if event.out or event.is_private: is_allowed = True
         try:
             chat = await event.get_chat()
-            if chat and chat.username and chat.username.lower() == MONITOR_SCHEDULE_USER.lower(): is_monitor = True
+            if chat and chat.username and chat.username.lower() == MONITOR_SCHEDULE_USER.lower(): is_allowed = True
         except: pass
 
-        if event.out or event.is_private:
+        if is_allowed:
             async with processing_lock:
                 try:
                     path = await event.message.download_media()
@@ -410,7 +401,6 @@ async def process_schedule_event(event):
                     os.remove(path)
                 except: pass
 
-    # === ПУБЛІКАЦІЯ ===
     if schedule and isinstance(schedule, list):
         service = await get_tasks_service()
         schedule.sort(key=lambda x: x.get('group', ''))
