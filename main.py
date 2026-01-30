@@ -268,5 +268,6 @@ async def startup():
 if __name__ == '__main__':
     client.start()
     client.loop.create_task(schedule_loop())
+    client.loop.create_task(check_weather_alerts())
     client.loop.run_until_complete(startup())
     client.run_until_disconnected()
