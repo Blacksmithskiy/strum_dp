@@ -47,6 +47,15 @@ THREAT_TRIGGERS = [
     "без загроз", "чисто", "розвідник"
 ]
 
+# === ТРИГЕРИ ГРАФІКІВ (ДЛЯ ФОТО) ===
+SCHEDULE_KEYWORDS = [
+    "графік", "график",
+    "відключення", "отключения",
+    "світло", "свет",
+    "дтек", "цєк",
+    "черга", "очередь"
+]
+
 # === ЗМІННІ ===
 API_ID = int(os.environ['API_ID'])
 API_HASH = os.environ['API_HASH']
@@ -107,27 +116,20 @@ async def get_tasks_service():
     creds = Credentials.from_authorized_user_info(creds_dict)
     return build('tasks', 'v1', credentials=creds)
 
-# === ЛОГІКА ФОРМАТУВАННЯ ТА ОЧИЩЕННЯ (REGEX) ===
+# === ЛОГІКА ФОРМАТУВАННЯ ТА ОЧИЩЕННЯ ===
 def format_threat_text(text):
-    # 1. ПОТУЖНЕ ОЧИЩЕННЯ СМІТТЯ (REGEX)
-    # (?i) - означає ігнорувати регістр (великі/малі літери)
-    
-    # Видаляє: "Контент [будь-що] @hydneprbot"
-    text = re.sub(r"(?i)контент\s*.*@hydneprbot", "", text)
-    # Видаляє просто згадку: "@hydneprbot"
-    text = re.sub(r"(?i)@hydneprbot", "", text)
-    # Видаляє: "Надслати новину" і все що поруч
-    text = re.sub(r"(?i)надслати новину", "", text)
-    # Видаляє: "Підписатися"
-    text = re.sub(r"(?i)підписатися", "", text)
-    
-    # Прибираємо зайві пусті рядки, які могли залишитися після видалення
-    text = text.strip()
+    # Очищення
+    text = re.sub(r"(?i)контент.*@hydneprbot", "", text)
+    text = re.sub(r"(?i).*@hydneprbot", "", text)
+    junk_phrases = ["надслати новину", "прислать новость", "підписатися", "подписаться", "👉"]
+    for junk in junk_phrases:
+        text = re.sub(f"(?i){re.escape(junk)}", "", text)
+    text = "\n".join([line.strip() for line in text.split('\n') if line.strip()])
     
     t_lower = text.lower()
     emoji = "⚡️"
 
-    # 2. ПІДБІР ЕМОДЗІ
+    # Емодзі
     if any(w in t_lower for w in ["балістика", "балистика", "ракета"]):
         emoji = "🚀"
     elif any(w in t_lower for w in ["бпла", "шахед", "дрон", "мопед"]):
@@ -141,7 +143,7 @@ def format_threat_text(text):
     elif "загроза" in t_lower:
         emoji = "⚠️"
         
-    # 3. ЛОГІКА РЕГІСТРУ
+    # Регістр
     if len(text) < 60:
         final_text = f"<b>{text.upper()}</b>"
     else:
@@ -286,7 +288,9 @@ def ask_gemini_schedule(photo_path):
         return json.loads(r.json()['candidates'][0]['content']['parts'][0]['text'].replace('```json', '').replace('```', '').strip())
     except: return []
 
-# === 1. МОНІТОРИНГ ЗАГРОЗ (ХД) ===
+client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
+
+# === 1. МОНІТОРИНГ ЗАГРОЗ ===
 @client.on(events.NewMessage(chats=MONITOR_THREATS_USER))
 async def threat_handler(event):
     text = (event.message.message or "")
@@ -303,10 +307,8 @@ async def threat_handler(event):
 # === 2. МОНІТОРИНГ ГРАФІКІВ (АВАРІЙКА) ===
 @client.on(events.NewMessage(chats=MONITOR_SCHEDULE_USER))
 async def schedule_monitor_handler(event):
-    text = (event.message.message or "").lower()
-    if re.search(r'[1-6]\.[1-2]', text) and re.search(r'\d{1,2}:\d{2}', text):
-        logger.info("Schedule detected in monitor channel!")
-        await process_schedule_event(event)
+    logger.info("New message in Schedule Monitor Channel")
+    await process_schedule_event(event)
 
 # === 3. ОСНОВНИЙ ОБРОБНИК ===
 @client.on(events.NewMessage())
@@ -346,10 +348,10 @@ async def main_handler(event):
             return
         if "test_threat" in text:
             content = event.message.message.replace("test_threat", "").strip()
-            if not content: content = "Тестова загроза: БпЛА в напрямку Дніпра"
+            if not content: content = "Тестова загроза: БпЛА в напрямку Дніпра\nКонтент 👉 @hydneprbot"
             formatted = format_threat_text(content)
             await client.send_message(CHANNEL_USERNAME, formatted + FOOTER, parse_mode='html')
-            await event.respond(f"🧨 Тест загрози відправлено: {content}")
+            await event.respond(f"🧨 Тест загрози відправлено.")
             return
 
     # === СИРЕНА ===
@@ -380,74 +382,89 @@ async def main_handler(event):
 # === УНІВЕРСАЛЬНА ФУНКЦІЯ ОБРОБКИ ГРАФІКІВ ===
 async def process_schedule_event(event):
     text = (event.message.message or "").lower()
-    schedule = []
     
+    # 1. СПРОБА ПАРСИНГУ ТЕКСТУ (Пріоритет)
+    schedule = []
     if re.search(r'[1-6]\.[1-2]', text) and re.search(r'\d{1,2}:\d{2}', text):
         schedule = parse_schedule(event.message.message)
-    elif event.message.photo:
-        # Перевірка для фото: тільки свої повідомлення або моніторинг
+        
+        # Якщо парсинг успішний - публікуємо красивий текст
+        if schedule and isinstance(schedule, list):
+            service = await get_tasks_service()
+            schedule.sort(key=lambda x: x.get('group', ''))
+            
+            is_update = any(w in text for w in ['зміни', 'оновлення', 'корегування', 'изменения'])
+            date_now = datetime.now().strftime('%d.%m.%Y')
+            
+            header = f"<b>⚡️✔️ ОНОВЛЕННЯ ГРАФІКІВ.</b>\n📅 <b>На {date_now}</b>" if is_update else f"<b>⚡️📌 ГРАФІКИ ВІДКЛЮЧЕНЬ.</b>\n📅 <b>На {date_now}</b>"
+            img_url = URL_NEW_GRAFIC if is_update else URL_GRAFIC
+
+            msg_lines = [header, ""]
+            prev_grp = None
+            has_valid = False
+            
+            for entry in schedule:
+                try:
+                    grp = entry.get('group', '?').strip()
+                    if grp not in VALID_GROUPS: continue 
+                    
+                    has_valid = True
+                    if entry['end'].endswith("T24:00:00"):
+                         entry['end'] = entry['end'].replace("T24:00:00", "T23:59:00")
+
+                    start = parser.parse(entry['start'])
+                    end = parser.parse(entry['end'])
+                    
+                    if prev_grp and grp != prev_grp: 
+                        msg_lines.append("➖➖➖➖➖➖➖➖")
+                    prev_grp = grp
+                    
+                    msg_lines.append(f"🔹 <b>Гр. {grp}:</b> {start.strftime('%H:%M')} - {end.strftime('%H:%M')}")
+                    
+                    if grp == MY_PERSONAL_GROUP:
+                        try:
+                            notif = start - timedelta(hours=2, minutes=10)
+                            task = {'title': f"💡 СВІТЛО (Гр. {grp})", 'notes': f"{start.strftime('%H:%M')}-{end.strftime('%H:%M')}", 'due': notif.isoformat() + 'Z'}
+                            service.tasks().insert(tasklist='@default', body=task).execute()
+                        except: pass
+
+                except: continue
+            
+            if has_valid:
+                msg = await send_safe("\n".join(msg_lines), img_url)
+                if msg:
+                    try:
+                        await client.pin_message(CHANNEL_USERNAME, msg, notify=True)
+                    except: pass
+            return # ВИХІД, якщо текст успішно оброблено
+
+    # 2. ЗАПАСНИЙ ВАРІАНТ: ПЕРЕСИЛКА ФОТО (Тільки якщо тексту не було)
+    if event.message.photo:
         is_allowed = False
-        if event.out or event.is_private: is_allowed = True
+        # Дозволяємо якщо це моніторинг або адмін
         try:
             chat = await event.get_chat()
-            if chat and chat.username and chat.username.lower() == MONITOR_SCHEDULE_USER.lower(): is_allowed = True
+            if chat and chat.username and chat.username.lower() == MONITOR_SCHEDULE_USER.lower(): 
+                # Додаткова перевірка на ключові слова, щоб не постити все підряд
+                if any(k in text for k in SCHEDULE_KEYWORDS):
+                    is_allowed = True
         except: pass
+        
+        if event.out or event.is_private: is_allowed = True
 
         if is_allowed:
-            async with processing_lock:
-                try:
-                    path = await event.message.download_media()
-                    schedule = await asyncio.to_thread(ask_gemini_schedule, path)
-                    os.remove(path)
-                except: pass
-
-    if schedule and isinstance(schedule, list):
-        service = await get_tasks_service()
-        schedule.sort(key=lambda x: x.get('group', ''))
-        
-        is_update = any(w in text for w in ['зміни', 'оновлення', 'корегування', 'изменения'])
-        date_now = datetime.now().strftime('%d.%m.%Y')
-        
-        header = f"<b>⚡️✔️ ОНОВЛЕННЯ ГРАФІКІВ.</b>\n📅 <b>На {date_now}</b>" if is_update else f"<b>⚡️📌 ГРАФІКИ ВІДКЛЮЧЕНЬ.</b>\n📅 <b>На {date_now}</b>"
-        img_url = URL_NEW_GRAFIC if is_update else URL_GRAFIC
-
-        msg_lines = [header, ""]
-        prev_grp = None
-        has_valid = False
-        
-        for entry in schedule:
             try:
-                grp = entry.get('group', '?').strip()
-                if grp not in VALID_GROUPS: continue 
-                
-                has_valid = True
-                if entry['end'].endswith("T24:00:00"):
-                     entry['end'] = entry['end'].replace("T24:00:00", "T23:59:00")
-
-                start = parser.parse(entry['start'])
-                end = parser.parse(entry['end'])
-                
-                if prev_grp and grp != prev_grp: 
-                    msg_lines.append("➖➖➖➖➖➖➖➖")
-                prev_grp = grp
-                
-                msg_lines.append(f"🔹 <b>Гр. {grp}:</b> {start.strftime('%H:%M')} - {end.strftime('%H:%M')}")
-                
-                if grp == MY_PERSONAL_GROUP:
+                # Очищаємо підпис до фото
+                clean_caption = format_threat_text(event.message.message)
+                # Пересилаємо фото з чистим підписом
+                msg = await client.send_message(CHANNEL_USERNAME, clean_caption + FOOTER, file=event.message.media, parse_mode='html')
+                if msg:
                     try:
-                        notif = start - timedelta(hours=2, minutes=10)
-                        task = {'title': f"💡 СВІТЛО (Гр. {grp})", 'notes': f"{start.strftime('%H:%M')}-{end.strftime('%H:%M')}", 'due': notif.isoformat() + 'Z'}
-                        service.tasks().insert(tasklist='@default', body=task).execute()
+                        await client.pin_message(CHANNEL_USERNAME, msg, notify=True)
                     except: pass
-
-            except: continue
-        
-        if has_valid:
-            msg = await send_safe("\n".join(msg_lines), img_url)
-            if msg:
-                try:
-                    await client.pin_message(CHANNEL_USERNAME, msg, notify=True)
-                except: pass
+                logger.info("Schedule IMAGE forwarded successfully.")
+            except Exception as e:
+                logger.error(f"Failed to forward schedule image: {e}")
 
 async def startup():
     global REAL_SIREN_ID
