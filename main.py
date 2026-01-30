@@ -13,24 +13,24 @@ from telethon import TelegramClient, events
 from telethon.sessions import StringSession
 from telethon.tl.functions.channels import JoinChannelRequest
 
-# === 1. НАСТРОЙКИ И ИНИЦИАЛИЗАЦИЯ ===
+# === 1. НАЛАШТУВАННЯ (ЛОГИ ТА КЛІЄНТ) ===
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 CHANNEL_USERNAME = "@strum_dp"
 SIREN_CHANNEL_USER = "sirena_dp"
 MONITOR_THREATS_USER = "hyevuy_dnepr"
-MONITOR_SCHEDULE_USER = "dtek_ua" # Только официальный ДТЕК
+MONITOR_SCHEDULE_USER = "dtek_ua" # Офіційний канал
 
 API_ID = int(os.environ['API_ID'])
 API_HASH = os.environ['API_HASH']
 SESSION_STRING = os.environ['TELEGRAM_SESSION']
 GEMINI_KEY = os.environ['GEMINI_API_KEY']
 
-# СОЗДАЕМ КЛИЕНТА ЗДЕСЬ (Чтобы не было ошибок)
+# СТВОРЮЄМО КЛІЄНТА ТУТ (Щоб уникнути помилок NameError)
 client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
 
-# === 2. КОНСТАНТЫ И ТЕКСТЫ ===
+# === 2. КОНСТАНТИ ===
 URL_MORNING = "https://arcanavisio.com/wp-content/uploads/2026/01/01_MORNING.jpg"
 URL_EVENING = "https://arcanavisio.com/wp-content/uploads/2026/01/02_EVENING.jpg"
 URL_TREVOGA = "https://arcanavisio.com/wp-content/uploads/2026/01/07_TREVOGA.jpg"
@@ -48,16 +48,17 @@ ____
 @strum_dp"""
 
 THREAT_TRIGGERS = ["бпла", "шахед", "дрон", "балістика", "вибух", "взрыв", "гучно", "ракета", "атака", "тривога", "загроза", "над містом", "курс на дніпро", "без загроз", "чисто", "розвідник"]
+GRAPHIC_TRIGGERS = ["графік", "відключен", "світл", "дтек", "стабілізаційні", "черга", "групи"]
 MONTHS_UA = {1: "січня", 2: "лютого", 3: "березня", 4: "квітня", 5: "травня", 6: "червня", 7: "липня", 8: "серпня", 9: "вересня", 10: "жовтня", 11: "листопада", 12: "грудня"}
 IS_ALARM_ACTIVE = False 
 
-# === 3. ФУНКЦИИ ===
+# === 3. ФУНКЦІЇ ===
 
 def format_threat_text(text):
-    # Удаление мусора
+    # Очищення від сміття та реклами
     text = re.sub(r"(?i)контент.*@hydneprbot", "", text)
     text = re.sub(r"(?i).*@hydneprbot", "", text)
-    for junk in ["надслати новину", "прислать новость", "підписатися", "👉"]:
+    for junk in ["надслати новину", "прислать новость", "підписатися", "👉", "надсилати"]:
         text = re.sub(f"(?i){re.escape(junk)}", "", text)
     text = "\n".join([l.strip() for l in text.split('\n') if l.strip()])
     
@@ -74,9 +75,12 @@ def format_threat_text(text):
     return f"{emoji} {final_text}"
 
 async def process_dtek_image(message_obj):
-    # Функция публикации графика
+    """Публікує графік з красивим підписом"""
     now = datetime.now(ZoneInfo("Europe/Kyiv"))
-    date_str = f"{now.day} {MONTHS_UA.get(now.month, '')}"
+    # Якщо час пізній (після 18:00), ймовірно графік на завтра
+    target_date = now + timedelta(days=1) if now.hour >= 18 else now
+    date_str = f"{target_date.day} {MONTHS_UA.get(target_date.month, '')}"
+    
     caption = (
         f"⚡️ ‼️Дніпропетровщина: графіки відключень на {date_str}\n"
         "▪️В разі змін, будемо оперативно вас інформувати у нашому телеграм-каналі.\n"
@@ -85,9 +89,9 @@ async def process_dtek_image(message_obj):
     try:
         msg = await client.send_message(CHANNEL_USERNAME, caption, file=message_obj.media, parse_mode='html')
         if msg: await client.pin_message(CHANNEL_USERNAME, msg, notify=True)
-        logger.info("✅ График опубликован")
+        logger.info("✅ Графік успішно опубліковано!")
     except Exception as e:
-        logger.error(f"Ошибка графика: {e}")
+        logger.error(f"Помилка публікації графіку: {e}")
 
 async def send_safe(text, img_url=None):
     try:
@@ -107,8 +111,7 @@ def get_weather():
     except: return None
 
 def get_ai_quote(mode):
-    # Упрощенная заглушка, чтобы не перегружать код (или верните AI если надо)
-    quotes = ["Ми робимо себе сильними.", "Спокій — це зброя.", "Завтра буде новий день."]
+    quotes = ["Ми робимо себе сильними.", "Спокій — це зброя.", "Завтра буде новий день.", "Світло завжди перемагає."]
     return random.choice(quotes)
 
 async def send_digest(mode):
@@ -127,74 +130,86 @@ async def send_digest(mode):
         msg = f"<b>🌒 НА ДОБРАНІЧ!</b>\n\n{w_txt}\n\n<blockquote>{q}</blockquote>"
         await send_safe(msg, URL_EVENING)
 
-# === 4. ХЕНДЛЕРЫ (ОБРАБОТЧИКИ) ===
+# === 4. ХЕНДЛЕРИ (ОБРОБНИКИ ПОВІДОМЛЕНЬ) ===
 
-# --- УГРОЗЫ (ХД) ---
+# --- ЗАГРОЗИ (ХД) ---
 @client.on(events.NewMessage(chats=MONITOR_THREATS_USER))
 async def threat_handler(event):
     text = (event.message.message or "")
     if any(k in text.lower() for k in THREAT_TRIGGERS):
         await client.send_message(CHANNEL_USERNAME, format_threat_text(text) + FOOTER, parse_mode='html')
 
-# --- ГРАФИКИ (ДТЕК ОФИЦИАЛЬНЫЙ) ---
+# --- ГРАФІКИ (ДТЕК ОФІЦІЙНИЙ - АВТОМАТ) ---
 @client.on(events.NewMessage(chats=MONITOR_SCHEDULE_USER))
 async def dtek_handler(event):
     text = (event.message.message or "").lower()
     if ("дніпро" in text or "дніпропетровщина" in text) and event.message.photo:
         await process_dtek_image(event.message)
 
-# --- ГЛАВНЫЙ (ИЗБРАННОЕ + КОМАНДЫ) ---
+# --- ГОЛОВНИЙ ХЕНДЛЕР (ВАШІ КОМАНДИ + SAVED MESSAGES) ---
 @client.on(events.NewMessage())
 async def main_handler(event):
     text = (event.message.message or "").lower()
     
-    # Фильтр: не реагировать на каналы мониторинга здесь (у них свои хендлеры)
+    # Ігноруємо канали моніторингу тут (щоб не було дублів)
     try:
         chat = await event.get_chat()
         if chat and chat.username and chat.username.lower() in [MONITOR_THREATS_USER, MONITOR_SCHEDULE_USER]: return
     except: pass
 
-    if event.out: # Это сообщение ОТ ВАС (в том числе в Saved Messages)
-        # Команды
+    # ТІЛЬКИ ВИХІДНІ (Те, що ви пишете або пересилаєте в Saved Messages)
+    if event.out:
+        # 1. КОМАНДИ
         if "test_morning" in text: await send_digest("morning"); return
-        if "test_evening" in text: await send_digest("evening"); return
+        if "test_evening" in text: await send_evening_digest(); return
+        
+        if "test_siren" in text:
+            global IS_ALARM_ACTIVE
+            if "відбій" in text or "отбой" in text:
+                IS_ALARM_ACTIVE = False
+                await send_safe(TXT_TREVOGA_STOP, img_url=URL_TREVOGA_STOP)
+            else:
+                IS_ALARM_ACTIVE = True
+                await send_safe(TXT_TREVOGA, img_url=URL_TREVOGA)
+            return
+            
         if "test_threat" in text:
-            raw = event.message.message.replace("test_threat", "").strip() or "Тест"
+            raw = event.message.message.replace("test_threat", "").strip() or "Тест загрози"
             await client.send_message(CHANNEL_USERNAME, format_threat_text(raw) + FOOTER, parse_mode='html')
             return
-        
-        # Пересылка ГРАФИКОВ (Вручную в Избранное)
-        # Если вы переслали картинку и там есть ключевые слова
-        if event.message.photo and any(k in text for k in ["графік", "відключен", "світл", "дтек"]):
+
+        # 2. РУЧНА ПЕРЕСИЛКА ГРАФІКІВ
+        # Якщо ви переслали картинку і в ній є слова "графік", "дтек" тощо
+        if event.message.photo and any(k in text for k in GRAPHIC_TRIGGERS):
             await process_dtek_image(event.message)
-            await event.respond("✅ График опубликован!")
+            await event.respond("✅ Графік помічено і відправлено на канал!")
             return
 
-    # Сирена
+    # 3. СИРЕНА (Автоматична перевірка від каналу сирени)
     if chat and chat.username == SIREN_CHANNEL_USER:
-        global IS_ALARM_ACTIVE
         if "відбій" in text:
             IS_ALARM_ACTIVE = False
-            await send_safe(TXT_TREVOGA_STOP, URL_TREVOGA_STOP)
+            await send_safe(TXT_TREVOGA_STOP, img_url=URL_TREVOGA_STOP)
         elif "тривог" in text:
             IS_ALARM_ACTIVE = True
-            await send_safe(TXT_TREVOGA, URL_TREVOGA)
+            await send_safe(TXT_TREVOGA, img_url=URL_TREVOGA)
 
 # === 5. ЗАПУСК ===
 async def schedule_loop():
     while True:
         now = datetime.now(ZoneInfo("Europe/Kyiv"))
-        # Упрощенная логика таймера для надежности
+        # Спрощений таймер
         if now.hour == 8 and now.minute == 0: await send_digest("morning"); await asyncio.sleep(61)
         elif now.hour == 22 and now.minute == 0: await send_digest("evening"); await asyncio.sleep(61)
         await asyncio.sleep(10)
 
 async def startup():
     try:
+        # Примусова підписка, щоб точно бачити повідомлення
         await client(JoinChannelRequest(SIREN_CHANNEL_USER))
         await client(JoinChannelRequest(MONITOR_THREATS_USER))
         await client(JoinChannelRequest(MONITOR_SCHEDULE_USER))
-        logger.info("✅ Bot Started Successfully.")
+        logger.info("✅ БОТ ЗАПУЩЕНО УСПІШНО.")
     except Exception as e: logger.error(f"Startup warning: {e}")
 
 if __name__ == '__main__':
@@ -202,4 +217,3 @@ if __name__ == '__main__':
     client.loop.create_task(schedule_loop())
     client.loop.run_until_complete(startup())
     client.run_until_disconnected()
-    
