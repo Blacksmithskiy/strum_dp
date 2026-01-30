@@ -1,72 +1,54 @@
 import os
+import re
+import time
 import json
 import asyncio
 import random
 import io
 import logging
-import re
 import requests
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
 from telethon.tl.functions.channels import JoinChannelRequest
-from google.oauth2.credentials import Credentials
-from googleapiclient.discovery import build
 
 # === ЛОГУВАННЯ ===
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # === НАЛАШТУВАННЯ ===
 CHANNEL_USERNAME = "@strum_dp"
 SIREN_CHANNEL_USER = "sirena_dp"
 MONITOR_THREATS_USER = "hyevuy_dnepr"
-MONITOR_SCHEDULE_USER = "dtek_ua" # Тільки офіційний канал
+MONITOR_SCHEDULE_USER = "dtek_ua" # Офіційний канал
 
 DNIPRO_LAT = 48.46
 DNIPRO_LON = 35.04
 
-# === УКРАЇНСЬКІ МІСЯЦІ ===
-MONTHS_UA = {
-    1: "січня", 2: "лютого", 3: "березня", 4: "квітня", 5: "травня", 6: "червня",
-    7: "липня", 8: "серпня", 9: "вересня", 10: "жовтня", 11: "листопада", 12: "грудня"
-}
-
-# === ЗМІННІ ===
+# === ЗМІННІ СЕРЕДОВИЩА ===
 API_ID = int(os.environ['API_ID'])
 API_HASH = os.environ['API_HASH']
 SESSION_STRING = os.environ['TELEGRAM_SESSION']
 GEMINI_KEY = os.environ['GEMINI_API_KEY']
-GOOGLE_TOKEN = os.environ['GOOGLE_TOKEN_JSON']
 
-# === МЕДІА (Для дайджестів та тривог) ===
+# === ІНІЦІАЛІЗАЦІЯ КЛІЄНТА (ВАЖЛИВО: ЗВЕРХУ) ===
+client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
+
+# === МЕДІА ===
 URL_MORNING = "https://arcanavisio.com/wp-content/uploads/2026/01/01_MORNING.jpg"
 URL_EVENING = "https://arcanavisio.com/wp-content/uploads/2026/01/02_EVENING.jpg"
 URL_TREVOGA = "https://arcanavisio.com/wp-content/uploads/2026/01/07_TREVOGA.jpg"
 URL_TREVOGA_STOP = "https://arcanavisio.com/wp-content/uploads/2026/01/08_TREVOGA_STOP.jpg"
-URL_EXTRA_START = "https://arcanavisio.com/wp-content/uploads/2026/01/05_EXTRA_GRAFIC.jpg"
-URL_EXTRA_STOP = "https://arcanavisio.com/wp-content/uploads/2026/01/06_EXTRA_STOP.jpg"
 
 # === ТЕКСТИ ===
 TXT_TREVOGA = "<b>⚠️❗️ УВАГА! ОГОЛОШЕНО ПОВІТРЯНУ ТРИВОГУ.</b>\n\n🏃 <b>ВСІМ ПРОЙТИ В УКРИТТЯ.</b>"
 TXT_TREVOGA_STOP = "<b>✅ ВІДБІЙ ПОВІТРЯНОЇ ТРИВОГИ.</b>"
-TXT_EXTRA_START = "<b>⚡❗️УВАГА! ЗАСТОСОВАНІ ЕКСТРЕНІ ВІДКЛЮЧЕННЯ.</b>\n\n<b>ПІД ЧАС ЕКСТРЕНИХ ВІДКЛЮЧЕНЬ ГРАФІКИ НЕ ДІЮТЬ.</b>"
-TXT_EXTRA_STOP = "<b>⚡️✔️ ЕКСТРЕНІ ВІДКЛЮЧЕННЯ СВІТЛА СКАСОВАНІ.</b>"
 
-# === ТРИГЕРИ ЗАГРОЗ (ХД) ===
-THREAT_TRIGGERS = [
-    "бпла", "шахед", "дрон", 
-    "балістика", "балистика",
-    "вибух", "взрыв",
-    "гучно", "громко",
-    "ракета", "атака",
-    "тривога", "тревога",
-    "загроза", "угроза",
-    "над містом", "над городом",
-    "курс на дніпро", "курсом на дніпро",
-    "без загроз", "чисто", "розвідник"
-]
+MONTHS_UA = {1: "січня", 2: "лютого", 3: "березня", 4: "квітня", 5: "травня", 6: "червня", 7: "липня", 8: "серпня", 9: "вересня", 10: "жовтня", 11: "листопада", 12: "грудня"}
+
+# === ТРИГЕРИ ЗАГРОЗ ===
+THREAT_TRIGGERS = ["бпла", "шахед", "дрон", "балістика", "вибух", "взрыв", "гучно", "ракета", "атака", "тривога", "загроза", "над містом", "курс на дніпро", "без загроз", "чисто", "розвідник"]
 
 # === ФУТЕР ===
 FOOTER = """
@@ -78,99 +60,59 @@ ____
 @strum_dp"""
 
 # === ЦИТАТИ ===
-BACKUP_MORNING = [
-    "Той, хто має «Навіщо» жити, витримає майже будь-яке «Як».",
-    "Ми робимо себе або сильними, або нещасними. Кількість зусиль однакова.",
-    "Я — не те, що зі мною сталося. Я — те, ким я обираю стати."
-]
-BACKUP_EVENING = [
-    "День завершено. Відпусти турботи, як дерево скидає сухе листя.",
-    "Сон — це найкраща медитація.",
-    "Навіть найтемніша ніч закінчується світанком. Відпочивай."
-]
+BACKUP_MORNING = ["Ми робимо себе або сильними, або нещасними. Кількість зусиль однакова.", "Там, де страх, місця немає творчості.", "Спокій — це теж зброя."]
+BACKUP_EVENING = ["День завершено. Відпусти турботи.", "Сон — це найкраща медитація.", "Завтра буде новий день."]
 
-REAL_SIREN_ID = None
 IS_ALARM_ACTIVE = False 
-HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+HEADERS = {'User-Agent': 'Mozilla/5.0'}
 
-# === AI ===
+# === ДОПОМІЖНІ ФУНКЦІЇ ===
+
 def get_ai_quote(mode="morning"):
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key={GEMINI_KEY}"
-    prompt = "Напиши одну коротку, глибоку думку (стоїцизм/психологія) для українців. Українська мова. До 15 слів. Без лапок."
-    payload = {"contents": [{"parts": [{"text": prompt}]}]}
+    # Спроба взяти AI цитату, інакше резерв
     try:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key={GEMINI_KEY}"
+        payload = {"contents": [{"parts": [{"text": "Напиши одну коротку, глибоку думку (стоїцизм/психологія) для українців. Українська мова. До 15 слів. Без лапок."}]}]}
         r = requests.post(url, json=payload, headers={'Content-Type': 'application/json'}, timeout=5)
         if r.status_code == 200:
             return r.json()['candidates'][0]['content']['parts'][0]['text'].strip().replace('"', '').replace('*', '')
     except: pass
     return random.choice(BACKUP_MORNING if mode == "morning" else BACKUP_EVENING)
 
-# === ПОГОДА ===
 def get_weather():
-    url = f"https://api.open-meteo.com/v1/forecast?latitude={DNIPRO_LAT}&longitude={DNIPRO_LON}&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max&current=temperature_2m,wind_speed_10m&timezone=Europe%2FKyiv"
-    for _ in range(3):
+    for _ in range(2):
         try:
+            url = f"https://api.open-meteo.com/v1/forecast?latitude={DNIPRO_LAT}&longitude={DNIPRO_LON}&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max&current=temperature_2m&timezone=Europe%2FKyiv"
             r = requests.get(url, headers=HEADERS, timeout=10)
             if r.status_code == 200: return r.json()
-        except: time.sleep(2)
+        except: time.sleep(1)
     return None
 
-# === ВІДПРАВКА ===
-async def send_safe(text, img_url):
+async def send_safe(text, img_url=None, file=None):
+    # Універсальна відправка: або посилання, або файл, або текст
     try:
-        response = await asyncio.to_thread(requests.get, img_url, headers=HEADERS, timeout=10)
-        if response.status_code == 200:
-            photo_file = io.BytesIO(response.content)
-            photo_file.name = "image.jpg"
-            return await client.send_message(CHANNEL_USERNAME, text + FOOTER, file=photo_file, parse_mode='html')
+        if file:
+            return await client.send_message(CHANNEL_USERNAME, text + FOOTER, file=file, parse_mode='html')
+        elif img_url:
+            response = await asyncio.to_thread(requests.get, img_url, headers=HEADERS, timeout=10)
+            if response.status_code == 200:
+                f = io.BytesIO(response.content)
+                f.name = "img.jpg"
+                return await client.send_message(CHANNEL_USERNAME, text + FOOTER, file=f, parse_mode='html')
     except Exception as e:
-        logger.warning(f"Image download failed: {e}")
+        logger.error(f"Send media error: {e}")
+    
     try:
         return await client.send_message(CHANNEL_USERNAME, text + FOOTER, parse_mode='html')
     except Exception as e:
-        logger.error(f"Text send failed: {e}")
-        return None
+        logger.error(f"Send text error: {e}")
 
-# === ДАЙДЖЕСТИ ===
-async def send_morning_digest():
-    data = await asyncio.to_thread(get_weather)
-    w_text = "🌡 <b>Погода:</b> Тимчасово недоступна."
-    if data:
-        d = data['daily']
-        w_text = f"🌡 <b>Температура:</b> {d['temperature_2m_min'][0]}°C ... {d['temperature_2m_max'][0]}°C\n☔️ <b>Опади:</b> {d['precipitation_probability_max'][0]}%"
-    
-    status = "🔴 Тривога активна!" if IS_ALARM_ACTIVE else "🟢 Небо чисте."
-    quote = await asyncio.to_thread(get_ai_quote, "morning")
-    msg = f"<b>☀️ ДОБРОГО РАНКУ, ДНІПРО!</b>\n\n{w_text}\n\n📢 <b>Статус повітряної тривоги:</b> {status}\n\n<blockquote>{quote}</blockquote>"
-    await send_safe(msg, URL_MORNING)
-
-async def send_evening_digest():
-    data = await asyncio.to_thread(get_weather)
-    w_text = "🌡 <b>Погода на завтра:</b> Дані оновлюються."
-    if data:
-        d = data['daily']
-        w_text = f"🌡 <b>Погода на завтра:</b> {d['temperature_2m_min'][1]}°C ... {d['temperature_2m_max'][1]}°C"
-
-    quote = await asyncio.to_thread(get_ai_quote, "evening")
-    msg = f"<b>🌒 НА ДОБРАНІЧ, ДНІПРО!</b>\n\n{w_text}\n\n<blockquote>{quote}</blockquote>\n\n🔋 Не забудьте перевірити заряд гаджетів."
-    await send_safe(msg, URL_EVENING)
-
-# === МОНІТОР АЛЕРТІВ ===
-async def check_weather_alerts(test_mode=False):
-    data = await asyncio.to_thread(get_weather)
-    if not data: 
-        if test_mode: await client.send_message(CHANNEL_USERNAME, "⚠️ Помилка погоди.", parse_mode='html')
-        return
-    curr = data.get('current', {})
-    if test_mode:
-        await client.send_message(CHANNEL_USERNAME, f"🧪 <b>ТЕСТ ПОГОДИ:</b> {curr.get('temperature_2m')}°C", parse_mode='html')
-
-# === ФОРМАТУВАННЯ ЗАГРОЗ ===
 def format_threat_text(text):
+    # Очищення від сміття
     text = re.sub(r"(?i)контент.*@hydneprbot", "", text)
     text = re.sub(r"(?i).*@hydneprbot", "", text)
-    junk = ["надслати новину", "прислать новость", "підписатися", "👉"]
-    for j in junk: text = re.sub(f"(?i){re.escape(j)}", "", text)
+    for junk in ["надслати новину", "прислать новость", "підписатися", "👉"]:
+        text = re.sub(f"(?i){re.escape(junk)}", "", text)
     text = "\n".join([l.strip() for l in text.split('\n') if l.strip()])
     
     t_lower = text.lower()
@@ -185,112 +127,130 @@ def format_threat_text(text):
     final_text = f"<b>{text.upper()}</b>" if len(text) < 60 else text
     return f"{emoji} {final_text}"
 
-client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
+# === ОБРОБНИКИ ПОДІЙ ===
 
-# === 1. ОБРОБКА ГРАФІКІВ (ДТЕК) ===
-@client.on(events.NewMessage(chats=MONITOR_SCHEDULE_USER))
-async def dtek_handler(event):
-    text = (event.message.message or "").lower()
-    
-    # Фільтр: Тільки якщо це стосується Дніпропетровщини
-    if "дніпро" in text or "дніпропетровщина" in text:
-        if event.message.photo:
-            # Формуємо дату (сьогоднішня)
-            now = datetime.now(ZoneInfo("Europe/Kyiv"))
-            day = now.day
-            month_name = MONTHS_UA.get(now.month, "")
-            
-            # Ваш шаблон тексту
-            caption = (
-                f"⚡️ ‼️Дніпропетровщина: графіки відключень на {day} {month_name}\n"
-                "▪️В разі змін, будемо оперативно вас інформувати у нашому телеграм-каналі.\n"
-                "Підписуйтесь та поділіться, будь ласка, з родичами та друзями.\n"
-                "____\n\n"
-                "⭐️ <a href=\"https://t.me/strum_dp\">ПІДПИСАТИСЬ НА КАНАЛ</a>\n"
-                "❤️ <a href=\"https://send.monobank.ua/jar/9gBQ4LTLUa\">ПІДТРИМАТИ СЕРВІС</a>\n\n"
-                "@strum_dp"
-            )
-            
-            try:
-                # Пересилаємо тільки фото з новим підписом
-                msg = await client.send_message(CHANNEL_USERNAME, caption, file=event.message.media, parse_mode='html')
-                if msg:
-                    await client.pin_message(CHANNEL_USERNAME, msg, notify=True)
-                    logger.info(f"✅ DTEK Schedule posted for {day} {month_name}")
-            except Exception as e:
-                logger.error(f"Failed to post DTEK schedule: {e}")
-
-# === 2. ОБРОБКА ЗАГРОЗ (ХД) ===
+# 1. ЗАГРОЗИ (ХД)
 @client.on(events.NewMessage(chats=MONITOR_THREATS_USER))
 async def threat_handler(event):
     text = (event.message.message or "")
-    text_lower = text.lower()
-    
-    if any(trigger in text_lower for trigger in THREAT_TRIGGERS):
+    if any(trigger in text.lower() for trigger in THREAT_TRIGGERS):
         try:
-            formatted_text = format_threat_text(text)
-            await client.send_message(CHANNEL_USERNAME, formatted_text + FOOTER, parse_mode='html')
-        except Exception as e:
-            logger.error(f"Threat repost failed: {e}")
+            await client.send_message(CHANNEL_USERNAME, format_threat_text(text) + FOOTER, parse_mode='html')
+        except: pass
 
-# === 3. СИСТЕМА (СИРЕНИ, ТЕСТИ, ТАЙМЕРИ) ===
+# 2. ГРАФІКИ (ДТЕК ОФІЦІЙНИЙ)
+@client.on(events.NewMessage(chats=MONITOR_SCHEDULE_USER))
+async def dtek_handler(event):
+    text = (event.message.message or "").lower()
+    if ("дніпро" in text or "дніпропетровщина" in text) and event.message.photo:
+        await process_dtek_image(event.message)
+
+# 3. ОСНОВНИЙ ХЕНДЛЕР (ТЕСТИ, СИРЕНИ, SAVED MESSAGES)
 @client.on(events.NewMessage())
 async def main_handler(event):
-    try:
-        chat = await event.get_chat()
-        username = chat.username.lower() if chat and hasattr(chat, 'username') and chat.username else ""
-        if username in [MONITOR_THREATS_USER.lower(), MONITOR_SCHEDULE_USER.lower()]: return
-    except: username = ""
-    
     text = (event.message.message or "").lower()
+    chat = await event.get_chat()
     
-    # ТЕСТИ
+    # Ігноруємо канали моніторингу (вони обробляються вище)
+    if chat and chat.username and chat.username.lower() in [MONITOR_THREATS_USER, MONITOR_SCHEDULE_USER]: return
+
+    # Логіка для вихідних повідомлень (Ваші команди або пересилки в Saved Messages)
     if event.out:
+        # КОМАНДИ
         if "test_morning" in text: await send_morning_digest(); return
         if "test_evening" in text: await send_evening_digest(); return
-        if "test_weather" in text: await check_weather_alerts(test_mode=True); return
+        if "test_weather" in text: await check_weather_alerts(True); return
+        
         if "test_siren" in text:
             global IS_ALARM_ACTIVE
             if "відбій" in text or "отбой" in text:
                 IS_ALARM_ACTIVE = False
-                await send_safe(TXT_TREVOGA_STOP, URL_TREVOGA_STOP)
+                await send_safe(TXT_TREVOGA_STOP, img_url=URL_TREVOGA_STOP)
             else:
                 IS_ALARM_ACTIVE = True
-                await send_safe(TXT_TREVOGA, URL_TREVOGA)
+                await send_safe(TXT_TREVOGA, img_url=URL_TREVOGA)
+            return
+            
+        if "test_threat" in text:
+            content = event.message.message.replace("test_threat", "").strip() or "Тест загрози"
+            await client.send_message(CHANNEL_USERNAME, format_threat_text(content) + FOOTER, parse_mode='html')
             return
 
-    # СИРЕНА
-    is_siren = False
-    if REAL_SIREN_ID and event.chat_id == REAL_SIREN_ID: is_siren = True
-    if username == SIREN_CHANNEL_USER: is_siren = True
-    
-    if is_siren:
-        if "відбій" in text or "отбой" in text:
-            IS_ALARM_ACTIVE = False
-            await send_safe(TXT_TREVOGA_STOP, URL_TREVOGA_STOP)
-        elif "тривог" in text or "тревога" in text:
-            IS_ALARM_ACTIVE = True
-            await send_safe(TXT_TREVOGA, URL_TREVOGA)
-        return
+        # РУЧНА ПЕРЕСИЛКА ГРАФІКІВ (В Saved Messages)
+        # Якщо ви переслали картинку і в ній є слово "графік" або "стабілізаційні"
+        if event.message.photo and ("графік" in text or "стабілізаційні" in text or "відключення" in text):
+             await process_dtek_image(event.message)
+             await event.respond("✅ Графік перехоплено і опубліковано.")
 
-    # ЕКСТРЕНІ (Ручні команди)
-    if "екстрені" in text or "экстренные" in text:
-        if "скасовані" in text or "отмена" in text:
-            await send_safe(TXT_EXTRA_STOP, URL_EXTRA_STOP)
-        else:
-            await send_safe(TXT_EXTRA_START, URL_EXTRA_START)
-        return
+    # СИРЕНА (Автоматична)
+    if chat and chat.username == SIREN_CHANNEL_USER:
+        if "відбій" in text:
+            IS_ALARM_ACTIVE = False
+            await send_safe(TXT_TREVOGA_STOP, img_url=URL_TREVOGA_STOP)
+        elif "тривог" in text:
+            IS_ALARM_ACTIVE = True
+            await send_safe(TXT_TREVOGA, img_url=URL_TREVOGA)
+
+# === ФУНКЦІЯ ПУБЛІКАЦІЇ ГРАФІКУ ===
+async def process_dtek_image(message_obj):
+    now = datetime.now(ZoneInfo("Europe/Kyiv"))
+    date_str = f"{now.day} {MONTHS_UA.get(now.month, '')}"
+    
+    caption = (
+        f"⚡️ ‼️Дніпропетровщина: графіки відключень на {date_str}\n"
+        "▪️В разі змін, будемо оперативно вас інформувати у нашому телеграм-каналі.\n"
+        "Підписуйтесь та поділіться, будь ласка, з родичами та друзями.\n"
+        "____\n\n"
+        "⭐️ <a href=\"https://t.me/strum_dp\">ПІДПИСАТИСЬ НА КАНАЛ</a>\n"
+        "❤️ <a href=\"https://send.monobank.ua/jar/9gBQ4LTLUa\">ПІДТРИМАТИ СЕРВІС</a>\n\n"
+        "@strum_dp"
+    )
+    try:
+        msg = await client.send_message(CHANNEL_USERNAME, caption, file=message_obj.media, parse_mode='html')
+        if msg: await client.pin_message(CHANNEL_USERNAME, msg, notify=True)
+    except Exception as e:
+        logger.error(f"DTEK Post Error: {e}")
+
+# === ДАЙДЖЕСТИ ТА ТАЙМЕРИ ===
+async def send_morning_digest():
+    data = await asyncio.to_thread(get_weather)
+    w_t = "🌡 Тимчасово недоступна."
+    if data:
+        d = data['daily']
+        w_t = f"🌡 <b>Температура:</b> {d['temperature_2m_min'][0]}°C ... {d['temperature_2m_max'][0]}°C\n☔️ <b>Опади:</b> {d['precipitation_probability_max'][0]}%"
+    
+    st = "🔴 Тривога активна!" if IS_ALARM_ACTIVE else "🟢 Небо чисте."
+    q = await asyncio.to_thread(get_ai_quote, "morning")
+    msg = f"<b>☀️ ДОБРОГО РАНКУ, ДНІПРО!</b>\n\n{w_t}\n\n📢 <b>Статус повітряної тривоги:</b> {st}\n\n<blockquote>{q}</blockquote>"
+    await send_safe(msg, img_url=URL_MORNING)
+
+async def send_evening_digest():
+    data = await asyncio.to_thread(get_weather)
+    w_t = "🌡 Тимчасово недоступна."
+    if data:
+        d = data['daily']
+        w_t = f"🌡 <b>Погода на завтра:</b> {d['temperature_2m_min'][1]}°C ... {d['temperature_2m_max'][1]}°C"
+    
+    q = await asyncio.to_thread(get_ai_quote, "evening")
+    msg = f"<b>🌒 НА ДОБРАНІЧ, ДНІПРО!</b>\n\n{w_t}\n\n<blockquote>{q}</blockquote>\n\n🔋 Не забудьте перевірити заряд гаджетів."
+    await send_safe(msg, img_url=URL_EVENING)
+
+async def check_weather_alerts(test_mode=False):
+    data = await asyncio.to_thread(get_weather)
+    if test_mode and data:
+        curr = data.get('current', {}).get('temperature_2m', 'N/A')
+        await client.send_message(CHANNEL_USERNAME, f"🧪 ТЕСТ ПОГОДИ: {curr}°C")
 
 async def schedule_loop():
     while True:
         now = datetime.now(ZoneInfo("Europe/Kyiv"))
-        t_m = now.replace(hour=8, minute=0, second=0, microsecond=0)
+        t_m = now.replace(hour=8, minute=0, second=0)
         if now >= t_m: t_m += timedelta(days=1)
-        t_e = now.replace(hour=22, minute=0, second=0, microsecond=0)
+        t_e = now.replace(hour=22, minute=0, second=0)
         if now >= t_e: t_e += timedelta(days=1)
-        next_evt = min(t_m, t_e)
-        await asyncio.sleep((next_evt - now).total_seconds())
-        if next_evt == t_m: await send_morning_digest()
+        
+        await asyncio.sleep((min(t_m, t_e) - now).total_seconds())
+        if min(t_m, t_e) == t_m: await send_morning_digest()
         else: await send_evening_digest()
         await asyncio.sleep(60)
 
@@ -303,12 +263,10 @@ async def startup():
         await client(JoinChannelRequest(MONITOR_THREATS_USER))
         await client(JoinChannelRequest(MONITOR_SCHEDULE_USER))
         logger.info("✅ Bot Started.")
-    except Exception as e:
-        logger.error(f"Startup Error: {e}")
+    except Exception as e: logger.error(f"Startup Error: {e}")
 
 if __name__ == '__main__':
     client.start()
     client.loop.create_task(schedule_loop())
-    client.loop.create_task(check_weather_alerts())
     client.loop.run_until_complete(startup())
     client.run_until_disconnected()
